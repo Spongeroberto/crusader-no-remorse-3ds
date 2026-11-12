@@ -163,6 +163,9 @@ target_link_libraries(diffcheck PRIVATE crusader_engine)
 add_executable(useprobe src/tools/useprobe.cpp)
 target_link_libraries(useprobe PRIVATE crusader_game)
 
+add_executable(bench src/tools/bench.cpp)
+target_link_libraries(bench PRIVATE crusader_game)
+
 add_executable(shapedump src/tools/shapedump.cpp)
 target_link_libraries(shapedump PRIVATE crusader_core)
 
