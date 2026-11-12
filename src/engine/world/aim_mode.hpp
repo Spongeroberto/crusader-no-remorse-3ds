@@ -53,6 +53,9 @@
 // check_designation, 02F3), when the target moves (designated_target_moved,
 // Item_I_move: the marker follows it while it stays the one found) and when
 // it is destroyed (Item_forget). The death of the controlled NPC clears it.
+// Port addition, precise aim (World::precise_aim): the target searched is
+// one the NPC has a line of fire to (find_target), and the quirk of the
+// unchanged direction is left out.
 
 #include "core/anim_dat.hpp"
 #include "engine/kernel.hpp"
@@ -92,7 +95,12 @@ void turn_crosshair(Kernel& kernel, World& world, const AnimDat& anims, std::uin
 // the aiming mode, a drawn weapon only has to enter the mode; when
 // `draw_when_holstered` is on, a holstered one is drawn first (action 7, as the
 // fire key does).
+// During a side step (the left stick's strafe sideways), which suspends the
+// mode, the crosshair stays shown at `angle`.
 void aim_at_angle(Kernel& kernel, World& world, const AnimDat& anims, int angle, bool draw_when_holstered);
+// Removes the crosshair aim_at_angle left shown out of the aiming mode (the
+// stick released, or the side step over without the mode entered again).
+void drop_stick_crosshair(World& world);
 
 std::optional<World::Point> crosshair_aim(const World& world, int z);
 

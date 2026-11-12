@@ -19,6 +19,7 @@ The changes fall into four groups:
 2. [Gamepad support](#2-gamepad-support)
 3. [Directional movement (left stick)](#3-directional-movement-left-stick)
 4. [Directional aiming (right stick)](#4-directional-aiming-right-stick)
+   - [4b. Precise aim](#4b-precise-aim)
 5. [Camera follows the player](#5-camera-follows-the-player)
 6. [Native resolution](#6-native-resolution)
 7. [Zoom](#7-zoom)
@@ -50,9 +51,9 @@ The original has nothing like it. This screen gathers every option the port adds
 - If the fonts are not loaded, the button is not shown.
 
 **Look**
-- The screen is cleared. A double red frame (colour `0x57`, corners cut over 3 pixels like the original buttons) fills (100,84)–(539,426).
+- The screen is cleared. A double red frame (colour `0x57`, corners cut over 3 pixels like the original buttons) fills (100,34)–(539,465).
 - The title is green (`0x0C`), with the "+" icon.
-- 10 rows, 27 px apart. The focused row is bright green (`0x0C`); the others are dark green (`0x75`).
+- 14 rows, 26 px apart. The focused row is bright green (`0x0C`); the others are dark green (`0x75`).
 - An on/off option shows its name on the left and its value on the right: ON / OFF (French: MARCHE / ARRET).
 
 | # | Row (EN / FR) | Effect | CFG key |
@@ -62,11 +63,15 @@ The original has nothing like it. This screen gathers every option the port adds
 | 2 | DIRECTIONAL MOVE / MODE DIRECTIONNEL | Toggles directional movement | `directionalmove` |
 | 3 | DIRECTIONAL AIM / VISEE DIRECTIONNELLE | Toggles directional aiming | `directionalaim` |
 | 4 | DRAW ON AIM / DEGAINE EN VISANT | Draws the weapon when the aim stick is pushed | `drawonaim` |
-| 5 | NATIVE RESOLUTION / RESOLUTION NATIVE | Toggles native resolution | `nativeresolution` |
-| 6 | ZOOM | Cycles AUTO → x1 → x1.5 → x2 → … → xN → AUTO | `viewzoom` |
-| 7 | AUTOSAVE / SAUVEGARDE AUTO | Toggles the autosave | `autosave` |
-| 8 | TOGGLE RUN / COURSE PERMANENTE | Toggles toggle-run mode | `togglerun` |
-| 9 | BACK / RETOUR | Closes the screen | — |
+| 5 | PRECISE AIM / VISEE PRECISE | Shots only lock on a target they can reach | `preciseaim` |
+| 6 | NATIVE RESOLUTION / RESOLUTION NATIVE | Toggles native resolution | `nativeresolution` |
+| 7 | ZOOM | Cycles AUTO → x1 → x1.5 → x2 → … → xN → AUTO | `viewzoom` |
+| 8 | SMOOTHING / LISSAGE | Bilinear filtering of the picture | `smoothscaling` |
+| 9 | AUTOSAVE / SAUVEGARDE AUTO | Toggles the autosave | `autosave` |
+| 10 | TOGGLE RUN / COURSE PERMANENTE | Toggles toggle-run mode | `togglerun` |
+| 11 | VIBRATION / VIBRATIONS | Controller rumble | `vibration` |
+| 12 | INTENSITY / INTENSITE | Rumble strength, 0 to 100 % by 10 (left / right) | `vibrationintensity` |
+| 13 | BACK / RETOUR | Closes the screen | — |
 
 **Controls**
 - Up or `8`, down or `2`: moves between rows. The focus stops at the first and last row; it does not wrap.
@@ -161,6 +166,14 @@ In menus, message boxes and screens, some inputs are **fixed**, whatever the bin
 ### 2.8 Quitting
 Holding **Select + Start** together quits the game. It is the only way out on handhelds (PortMaster), where `gptokeyb` is not used.
 
+### 2.8b Save names without a keyboard (PortMaster)
+Handhelds have no keyboard to type a save's name, and the original refuses to save under an empty one. With **`--auto-save-names`**, which only the PortMaster launcher (`Crusader.sh`) passes:
+- choosing a slot on the Save screen (F9 or the menu's "save game") proposes the **local date and time** as its name, in place of the slot's: `12/11/2026 14:32` (French: day first), `11/12/2026 14:32` (US: month first);
+- **A** saves under it, **B** leaves the slot as it was; a keyboard plugged in can still edit the name;
+- a console whose clock is not set (before 2020) gets `SAUVEGARDE` / `SAVED GAME` instead.
+
+Files: `src/engine/ui/load_screen.*` (`set_auto_name`, `dated_name`), `src/game/game.cpp` (`auto_save_name_function`), `src/game/main.cpp`.
+
 ### 2.9 Controller screen
 - Opened from row 0 of the Enhancements screen.
 - Two columns, rows 18 px apart:
@@ -230,6 +243,23 @@ The right stick puts the crosshair directly in the direction it points.
 - If the avatar does not face the crosshair (16-way direction measured from its feet) and is not busy, it turns with its guard animation: `0x2E` kneeling, `4` standing.
 - If target designation is active, the target search runs again after the turn.
 - **Leaving the aiming mode**: releasing the stick does not leave it, as in the original. Walking with the left stick (not aiming) leaves it at once; a **side step** or a **roll** leaves it for the duration of the animation. To put the weapon away, double-click the **right mouse button**; on the controller, the **jump** action (B by default) holsters a drawn weapon first, then jumps.
+
+---
+
+## 4b. Precise aim
+
+**Option:** PRECISE AIM / VISEE PRECISE (`preciseaim`, off by default)
+**Files:** `src/engine/world/projectile.cpp` (`find_target`), `src/engine/world/aim_mode.cpp` (`designate`)
+
+In the original, a shot of the player locks on the **nearest** target in the 16-way direction it is fired in (`TRACKER_1128_0158`), wherever it is in height and whether or not it can be reached. In levels with several floors, the nearest enemy is often one floor up or down, behind the slab: the shot flies to it and ends in the floor or the ceiling, while the enemy in sight on the player's floor is left alone. A nearer enemy behind a wall does the same.
+
+**Rules**
+- For the controlled NPC only (the player, or a robot taken over). Enemy shots are unchanged.
+- A candidate the shooter has **no line of fire** to is passed over: the same test the original makes before showing the target marker and before an enemy fires (`Item::I_fireDistance`: a sweep from the muzzle points of the shot animation, in that direction, to the target's aim point). The next candidate, by the original rules (NPCs first, then markable shapes, then the nearest), takes the shot.
+- No reachable target: the shot flies to the crosshair, as the original does without a target.
+- A shooter whose shot animation has no firing frame is not filtered (the test cannot be made).
+- The target marker (target designation, **R**) uses the same search, so it **always shows the target the shot goes to**. The original quirk where a new target in an unchanged direction stayed unmarked is left out with the option.
+- Unchanged: the 16 (or 8) directions, the 0x400 range, the spread of the shots.
 
 ---
 

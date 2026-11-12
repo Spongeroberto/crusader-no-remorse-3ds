@@ -38,6 +38,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
@@ -156,6 +157,7 @@ public:
     int result() const override { return s_.result().value_or(0); }
     int slot() const { return s_.slot(); }
     const std::string& name() const { return s_.name(); }
+    void set_auto_name(std::function<std::string()> auto_name) { s_.set_auto_name(std::move(auto_name)); }
 
 private:
     LoadScreen s_;
@@ -679,6 +681,21 @@ void Game::set_save_dir(const std::filesystem::path& dir) {
     save_names_ = LoadScreen::read_names(dir);
 }
 
+// @orig none: port addition (save names without a keyboard)
+std::function<std::string()> Game::auto_save_name_function() const {
+    if (!auto_save_names_) return {};
+    return [] {
+        const std::time_t now = std::time(nullptr);
+        std::tm local{};
+#ifdef _WIN32
+        localtime_s(&local, &now);
+#else
+        localtime_r(&now, &local);
+#endif
+        return LoadScreen::dated_name(local);
+    };
+}
+
 // @orig 1058:0528
 
 void Game::set_save_name(int slot, const std::string& name) {
@@ -770,7 +787,10 @@ void Game::new_game(int difficulty) {
 // @orig 11D8:31CF
 void Game::update(std::uint32_t elapsed_us) {
     // The enhancements window edits config_ in place.
-    if (world_) world_->set_follow_player(config_.follow_player);
+    if (world_) {
+        world_->set_follow_player(config_.follow_player);
+        world_->set_precise_aim(config_.precise_aim);
+    }
     // The right stick aims for whichever NPC is controlled (a robot taken over
     // too), with the fire key's conditions (CombatControl::handle_key): not
     // for a dead NPC, nor for the player held in stasis.
@@ -780,6 +800,8 @@ void Game::update(std::uint32_t elapsed_us) {
         // Screen east is the world angle 315 degrees, north 225: 315 - screen.
         aim_at_angle(*kernel_, *world_, anims_, static_cast<int>(std::lround(315.0 - aim_stick_deg_)),
                      config_.draw_on_aim);
+    } else if (world_) {
+        drop_stick_crosshair(*world_);
     }
     // Outside the kernel slice: a key repeat can choose a save from within it.
     if (pending_load_) {
@@ -1156,7 +1178,8 @@ void Game::open_menu(bool no_game) {
                             port_version.empty() ? std::string() : tr("PORTAGE V", "PORT V") + port_version,
                             tr("DONNEES DU JEU ", "GAME DATA ") +
                                 (data_version_.empty() ? std::string(tr("INCONNUES", "UNKNOWN")) : "V" + data_version_) + " " +
-                                (data_language_.empty() ? std::string(tr("LANGUE INCONNUE", "UNKNOWN LANGUAGE")) : data_language_)},
+                                (data_language_.empty() ? std::string(tr("LANGUE INCONNUE", "UNKNOWN LANGUAGE")) : data_language_),
+                            auto_save_name_function()},
         menu_shared_, no_game);
     auto p = std::make_unique<ModalProcess>();
     menu_process_ = p.get();
@@ -1341,6 +1364,7 @@ bool Game::function_key(std::uint16_t code) {
         cursor_.show();
         auto save = std::make_unique<LoadGump>(gumps_, fonts_, save_names_, menu_shared_.selected_slot,
                                                LoadScreen::Mode::kSave);
+        save->set_auto_name(auto_save_name_function());
         open_screen(std::move(save), [this](const ModalGump& screen) {
             cursor_.reset(MouseCursor::kArrow);
             cursor_.hide();

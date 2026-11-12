@@ -38,8 +38,11 @@ bool markable(const World& world, ObjId id) {
 
 int npc_dir(const World& world, ObjId id) { return world.npc_direction(id) & 0xF; }
 
-// TRACKER_1128_0158 for the controlled NPC, in 16 directions.
-ObjId target_in(const World& world, int dir) { return find_target(world, world.state.controlled_npc, dir, true); }
+// TRACKER_1128_0158 for the controlled NPC, in 16 directions (with precise
+// aim, only a target it can reach).
+ObjId target_in(const World& world, const AnimDat& anims, int dir) {
+    return find_target(world, world.state.controlled_npc, dir, true, &anims);
+}
 
 // 1138:0459 / Item_I_move: where the marker of `target` goes when the target
 // is at (x, y, z).
@@ -78,7 +81,7 @@ int muzzle_height(const World& world, const AnimDat& anims, ObjId id, int dir) {
 }
 
 void search_after_turn(Kernel& kernel, World& world, const AnimDat& anims, int dir) {
-    const ObjId found = target_in(world, dir);
+    const ObjId found = target_in(world, anims, dir);
     if (found == 0) designate(kernel, world, anims, 0);
     else if (found != world.state.aim.target) designate(kernel, world, anims, markable(world, found) ? found : 0);
 }
@@ -213,8 +216,27 @@ void turn_crosshair(Kernel& kernel, World& world, const AnimDat& anims, std::uin
 void aim_at_angle(Kernel& kernel, World& world, const AnimDat& anims, int angle, bool draw_when_holstered) {
     GameState::Aim& aim = world.state.aim;
     const ObjId id = world.state.controlled_npc;
-    if (id == 0 || aim.no_stand || aim.turns != 0) return;
+    if (id == 0 || aim.no_stand) return;
     if (!aim.active) {
+        // A side step (0x1C, 0x1D: the strafe of the left stick sideways) is
+        // a turning animation, which leaves the aiming mode until it ends
+        // (aim_after_do_anim): the crosshair would vanish for the whole
+        // strafe. While the stick aims, it stays shown at the stick's angle,
+        // in the mode's own slot, which entering the mode again then moves.
+        // Its process, from do_anim on (the last action is noted only once it
+        // starts).
+        bool side_step = false;
+        kernel.for_each_process([&](const Process& p) {
+            const auto* anim = dynamic_cast<const ActorAnimProcess*>(&p);
+            side_step |= anim && anim->owner() == id && (anim->action() == 0x1C || anim->action() == 0x1D);
+        });
+        if (aim.turns != 0 && side_step) {
+            aim.angle = ((angle % 360) + 360) % 360;
+            place_crosshair(world, anims);
+            return;
+        }
+        drop_stick_crosshair(world);
+        if (aim.turns != 0) return;
         // With the weapon already out (a loaded game), the stick only has to
         // enter the aim mode. Otherwise it draws the weapon, as the fire key
         // does (7, remapped by the weapon; an aiming action, so the aim mode
@@ -225,14 +247,16 @@ void aim_at_angle(Kernel& kernel, World& world, const AnimDat& anims, int angle,
         else if (draw_when_holstered) do_anim(kernel, world, anims, id, kActionRaise, kDirCurrent);
         return;
     }
+    if (aim.turns != 0) return;
     angle = ((angle % 360) + 360) % 360;
     const int current = npc_dir(world, id);
     const Item* npc = world.get(id);
     if (!npc) return;
-    if (aim.angle != angle || aim.crosshair == -1) {
-        aim.angle = angle;
-        place_crosshair(world, anims);
-    }
+    // Placed again at every call, not only when the angle changes: the NPC
+    // moving while aiming (a strafe with the left stick) carries the crosshair
+    // along, instead of leaving it where it was and turning round it.
+    aim.angle = angle;
+    place_crosshair(world, anims);
     const ScreenSprite* cross = world.state.screen_sprites.get(aim.crosshair);
     if (!cross) return;
     const ShapeInfo* info = world.shape_info(npc->shape);
@@ -242,6 +266,14 @@ void aim_at_angle(Kernel& kernel, World& world, const AnimDat& anims, int angle,
     if (wanted == current || actor_busy(kernel, id)) return;
     do_anim(kernel, world, anims, id, kneeling(world, id) ? 0x2E : 4, wanted);
     if (world.state.target_designation) search_after_turn(kernel, world, anims, wanted);
+}
+
+// @orig none: port-only directional aiming
+void drop_stick_crosshair(World& world) {
+    GameState::Aim& aim = world.state.aim;
+    if (aim.active || aim.crosshair == -1) return;
+    world.state.screen_sprites.remove(aim.crosshair);
+    aim.crosshair = -1;
 }
 
 std::optional<World::Point> crosshair_aim(const World& world, int z) {
@@ -267,7 +299,10 @@ void designate(Kernel& kernel, World& world, const AnimDat& anims, ObjId target)
     if (target == 0) return;
     const ObjId npc = world.state.controlled_npc;
     const int dir = npc_dir(world, npc);
-    if (aim.marked_dir == dir) return;
+    // The original quirk (a new target in an unchanged direction stays
+    // unmarked) is left out with precise aim: the marker always shows the
+    // target the shot goes to.
+    if (aim.marked_dir == dir && !world.precise_aim()) return;
     aim.checked_at = kernel.ticks();
     const Item* item = world.get(target);
     if (item && fire_distance(world, anims, npc, target, dir) != 0) {
@@ -283,7 +318,7 @@ void redesignate(Kernel& kernel, World& world, const AnimDat& anims) {
     if (!world.state.target_designation) return;
     if (world.state.aim.target != 0) designate(kernel, world, anims, 0);
     if (!world.state.aim.active) return;
-    const ObjId found = target_in(world, npc_dir(world, world.state.controlled_npc));
+    const ObjId found = target_in(world, anims, npc_dir(world, world.state.controlled_npc));
     if (found != 0 && markable(world, found)) designate(kernel, world, anims, found);
 }
 
@@ -298,7 +333,7 @@ void check_designation(Kernel& kernel, World& world, const AnimDat& anims) {
     const std::uint32_t now = kernel.ticks();
     if (now < aim.checked_at + kRecheckTicks) return;
     aim.checked_at = now;
-    const ObjId found = target_in(world, npc_dir(world, world.state.controlled_npc));
+    const ObjId found = target_in(world, anims, npc_dir(world, world.state.controlled_npc));
     if (found == 0) designate(kernel, world, anims, 0);
     else if (found != aim.target && markable(world, found)) designate(kernel, world, anims, found);
 }
@@ -308,7 +343,7 @@ void designated_target_moved(Kernel& kernel, World& world, const AnimDat& anims,
                              std::int32_t y, std::int32_t z) {
     const ObjId npc = world.state.controlled_npc;
     if (npc == 0 || !world.get(npc) || world.is_dead(npc)) return;
-    const ObjId found = target_in(world, npc_dir(world, npc));
+    const ObjId found = target_in(world, anims, npc_dir(world, npc));
     if (found == target) {
         const World::Point p = marker_place(world, target, x, y, z);
         world.state.screen_sprites.move(world.state.aim.marker, p.x, p.y, static_cast<std::uint8_t>(p.z));

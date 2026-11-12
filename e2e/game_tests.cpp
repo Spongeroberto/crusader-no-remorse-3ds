@@ -2907,6 +2907,92 @@ void test_aiming(const std::filesystem::path& data) {
     CHECK(game.machine().faults().empty());
 }
 
+// Port addition, precise aim (GameConfig::precise_aim): two NPCs in the
+// direction of the shot, the nearer one a floor up, standing on a slab that
+// cuts the line of fire. The original locks on the nearer one (the shot ends
+// in the slab); with the option, on the one on the player's floor, which the
+// shot hits.
+void test_precise_aim(const std::filesystem::path& data) {
+    Game game(data, test_saves(data));
+    game.load_save(13);
+    for (int i = 0; i < 5; ++i) game.update(kFrameUs);
+    World& w = game.world();
+    const AnimDat& anims = game.animations();
+    const Item* player = w.get(1);
+    std::vector<ObjId> victims;
+    for (ObjId id = 2; id < 256 && victims.size() < 2; ++id) {
+        const Item* it = w.get(id);
+        if (it && !w.is_dead(id) && (it->z & 0xFF) != 254 && w.npc_hp(id) > 0 && w.is_trackable(it->shape))
+            victims.push_back(id);
+    }
+    CHECK(victims.size() == 2);
+    if (victims.size() != 2) return;
+    const ObjId upstairs = victims[0], level = victims[1];
+    std::vector<ObjId> others;
+    for (ObjId id : w.tracked())
+        if (id != 0 && id != upstairs && id != level) others.push_back(id);
+    for (ObjId id : others) w.set_broken(*w.get(id));
+    for (Pid pid = 1; pid < 400; ++pid)
+        if (Process* p = game.kernel().get(pid); p && (p->owner() == upstairs || p->owner() == level)) p->fail();
+    const int dir = 4;  // +x
+    const std::int32_t px = player->x, py = player->y, pz = player->z & 0xFF;
+    // NPCs of another map, brought here: put in the map's cells by the move.
+    w.get(upstairs)->off_map = w.get(level)->off_map = false;
+    w.move_item(upstairs, px + 256, py - 40, pz + 96);
+    w.move_item(level, px + 320, py + 24, pz);
+    w.npc_record(1)[npc::kDirection] = static_cast<std::uint8_t>(dir);
+    w.npc_record(1)[npc::kLastAnim] = 8;
+    w.npc_record(1)[npc::kLastAnim + 1] = 0;
+    CHECK(find_target(w, 1, dir, true) == upstairs);  // the nearer (Chebyshev 256 against 320)
+
+    // The upper floor: a slab (0x2E, 128 x 32 x 16) at the height of the
+    // upper NPC's feet, placed where it cuts the line of fire to it only (the
+    // muzzle is 64 above the player's feet: the line to the other NPC stays
+    // under the slab).
+    const ObjId slab = w.create(0x2E, 0);
+    w.pop_to_coords(px, py, pz + 80);
+    bool placed = false;
+    for (int x = 64; x <= 192 && !placed; x += 16) {
+        for (int y = -32; y <= 8 && !placed; y += 8) {
+            w.move_item(slab, px + x, py + y, pz + 80);
+            placed = fire_distance(w, anims, 1, upstairs, dir) == 0 && fire_distance(w, anims, 1, level, dir) != 0;
+        }
+    }
+    const Item* si = w.get(slab);
+    std::printf("precise aim: slab %u at (%d, %d, +80), cuts only the line to the upper NPC %d\n", slab,
+                si ? si->x - px : 0, si ? si->y - py : 0, placed);
+    CHECK(placed);
+    if (!placed) return;
+    // Another slab under the upper NPC's feet, or it falls down to the
+    // player's floor (and becomes a fair target there).
+    w.create(0x2E, 0);
+    w.pop_to_coords(px + 256, py - 40, pz + 80);
+    CHECK(fire_distance(w, anims, 1, level, dir) != 0);
+
+    // Off (whatever CRUSADER.CFG says): the original choice, the nearer one.
+    game.config().precise_aim = false;
+    game.update(kFrameUs);
+    CHECK(!w.precise_aim());
+    CHECK(find_target(w, 1, dir, true, &anims) == upstairs);
+    // On: the one in sight; the shot hits it, not the other.
+    game.config().precise_aim = true;
+    game.update(kFrameUs);
+    CHECK(w.precise_aim());
+    CHECK(find_target(w, 1, dir, true, &anims) == level);
+    CHECK(find_target(w, 1, dir, true) == upstairs);  // without the line of fire check
+    const int up_hp = w.npc_hp(upstairs), level_hp = w.npc_hp(level);
+    bool hit = false;
+    for (int shot = 0; shot < 5 && !hit; ++shot) {  // the pistol's spread may miss
+        fire_from_muzzle(game, 1, dir, 11, true);
+        for (int frames = 0; frames < 300 && projectiles(game) != 0; ++frames) game.update(kFrameUs);
+        hit = w.npc_hp(level) < level_hp;
+    }
+    std::printf("precise aim: NPC on the floor hp %d -> %u, upper NPC hp %d -> %u at z %d\n", level_hp,
+                w.npc_hp(level), up_hp, w.npc_hp(upstairs), w.get(upstairs)->z & 0xFF);
+    CHECK(hit && w.npc_hp(upstairs) == up_hp);
+    CHECK(game.machine().faults().empty());
+}
+
 // Milestone 6: the aiming mode and target designation (aim_mode.hpp), on
 // SAVEGAME.13.
 void test_aim_mode(const std::filesystem::path& data) {
@@ -3054,6 +3140,67 @@ void test_aim_stick_draws(const std::filesystem::path& data) {
     CHECK(aim.active);
     // Action 7, left as is by a weapon that keeps the actions, else 0xC.
     CHECK(raised == 7 || raised == 0xC);
+
+    // Moving while the stick aims (a strafe towards the crosshair, 0x24)
+    // carries the crosshair along: it stays 200 units ahead of him, and he
+    // keeps his direction instead of turning round where it was.
+    auto offset = [&] {
+        const Item* p = w.get(1);
+        const ShapeInfo* info = w.shape_info(p->shape);
+        const ScreenSprite* cross = w.state.screen_sprites.get(aim.crosshair);
+        const int cx = static_cast<std::uint16_t>(p->x - info->footpad_x * 8);
+        const int cy = static_cast<std::uint16_t>(p->y - info->footpad_y * 8);
+        return std::pair<int, int>{cross->x - cx, cross->y - cy};
+    };
+    const auto before = offset();
+    const int dir_before = w.npc_direction(1) & 0xF;
+    const std::int32_t x0 = w.get(1)->x, y0 = w.get(1)->y;
+    for (int step = 0; step < 4; ++step) {
+        do_anim(game.kernel(), w, game.animations(), 1, 0x24, kDirCurrent);
+        settle(game);
+    }
+    const auto after = offset();
+    std::printf("aim stick while moving: moved (%d, %d), offset (%d, %d) -> (%d, %d), direction %d -> %d\n",
+                w.get(1)->x - x0, w.get(1)->y - y0, before.first, before.second, after.first, after.second,
+                dir_before, w.npc_direction(1) & 0xF);
+    CHECK(w.get(1)->x != x0 || w.get(1)->y != y0);
+    CHECK(std::abs(after.first - before.first) <= 1 && std::abs(after.second - before.second) <= 1);
+    CHECK((w.npc_direction(1) & 0xF) == dir_before);
+
+    // A side step (the strafe sideways, 0x1C) leaves the aiming mode until it
+    // ends, but the crosshair stays shown, still ahead of him, at every frame.
+    const std::int32_t x1 = w.get(1)->x, y1 = w.get(1)->y;
+    int frames = 0, hidden = 0, off = 0;
+    bool left_mode = false;
+    for (int step = 0; step < 3; ++step) {
+        do_anim(game.kernel(), w, game.animations(), 1, 0x1C, kDirCurrent);
+        for (int i = 0; i < 400 && actor_busy(game.kernel(), 1); ++i) {
+            game.update(kFrameUs);
+            ++frames;
+            left_mode |= !aim.active;
+            if (!w.state.screen_sprites.get(aim.crosshair)) {
+                ++hidden;
+                continue;
+            }
+            // Placed before the frame's slice moves him: one frame behind
+            // at most (a step is 16 units at most).
+            const auto o = offset();
+            if (std::abs(o.first - before.first) > 16 || std::abs(o.second - before.second) > 16) ++off;
+        }
+    }
+    std::printf("aim stick side steps: moved (%d, %d), %d frames, crosshair hidden %d, off %d, mode left %d\n",
+                w.get(1)->x - x1, w.get(1)->y - y1, frames, hidden, off, left_mode);
+    CHECK(w.get(1)->x != x1 || w.get(1)->y != y1);
+    CHECK(left_mode && hidden == 0 && off == 0);
+    // Released, the stick leaves no crosshair out of the mode.
+    do_anim(game.kernel(), w, game.animations(), 1, 0x1C, kDirCurrent);
+    game.update(kFrameUs);
+    game.update(kFrameUs);
+    game.set_aim_stick(false, 0);
+    game.update(kFrameUs);
+    std::printf("aim stick released in a side step: aim mode %d, crosshair %d\n", aim.active, aim.crosshair);
+    CHECK(aim.active == (aim.crosshair != -1));
+    settle(game);
     CHECK(game.machine().faults().empty());
 }
 
@@ -5054,6 +5201,64 @@ void test_save_game(const std::filesystem::path& data) {
     std::filesystem::remove_all(dir);
 }
 
+// Port addition, for consoles without a keyboard (--auto-save-names, the
+// PortMaster launcher): choosing a slot to save proposes the date and time,
+// Enter (the pad's A) saves under it; Escape (B) leaves the slot as it was.
+void test_auto_save_names(const std::filesystem::path& data) {
+    std::tm t{};
+    t.tm_year = 2026 - 1900, t.tm_mon = 10, t.tm_mday = 12, t.tm_hour = 9, t.tm_min = 5;
+    CHECK(LoadScreen::dated_name(t) == "12/11/2026 09:05");
+    std::tm unset{};
+    unset.tm_year = 70;
+    CHECK(LoadScreen::dated_name(unset) == "SAUVEGARDE");
+
+    const auto dir = std::filesystem::temp_directory_path() / "crusader_auto_save_name_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    std::filesystem::copy_file(test_saves(data) / "SAVEGAME.1", dir / "SAVEGAME.1");
+    Game game(data, test_saves(data));
+    game.set_save_dir(dir);
+    game.set_auto_save_names(true);
+    game.load_save(1);
+    settle(game);
+    // Every character of the proposed name has a glyph in the slots' font, and
+    // the name with '_' fits a slot as a typed one must.
+    const TextWriter writer(game.fonts(), LoadScreen::kFont);
+    for (char c : std::string("0123456789/: ")) CHECK(writer.char_width(static_cast<unsigned char>(c)) > 0);
+    CHECK(writer.measure("28/12/2026 23:59_").width <= 314 - 4);
+
+    // F9, down: slot 1 (empty); Escape leaves it, Enter again proposes the
+    // date and saves under it.
+    press(game, 0x43, false);
+    press(game, 0x50, true);
+    press(game, 0x1C, false, 0x0D);
+    press(game, 0x01, false, 0x1B);
+    CHECK(game.screen() && game.save_names()[1].empty());
+    press(game, 0x1C, false, 0x0D);
+    press(game, 0x1C, false, 0x0D);
+    CHECK(!game.screen());
+    const std::string name = game.save_names()[1];
+    CHECK(name.size() == 16 && name[2] == '/' && name[5] == '/' && name[13] == ':');
+    CHECK(LoadScreen::read_names(dir)[1] == name);
+
+    // The menu's "save game" on slot 0 ("SEB"): the date replaces its name.
+    press(game, 0x01, false, 0x1B);
+    CHECK(game.menu());
+    if (!game.menu()) return;
+    const auto b = game.menu()->button(MainMenu::kSave);
+    game.mouse_button(true, b.x0 + 5, b.y0 + 5);
+    game.mouse_button(false, b.x0 + 5, b.y0 + 5);
+    press(game, 0x48, true);
+    press(game, 0x1C, false, 0x0D);
+    CHECK(game.menu() && game.menu()->load_screen() && game.menu()->load_screen()->editing() &&
+          game.menu()->load_screen()->name().size() == 16);
+    press(game, 0x1C, false, 0x0D);
+    CHECK(!game.menu());
+    CHECK(LoadScreen::read_names(dir)[0].size() == 16);
+    CHECK(game.machine().faults().empty());
+    std::filesystem::remove_all(dir);
+}
+
 // Item::I_destroy (10A8:1365): what rests on a crate falls when the crate is
 // destroyed. For items carried by crates in the saved games, every crate
 // under the item is destroyed on a fresh load; the item must end lower (an
@@ -5459,6 +5664,13 @@ int main(int argc, char** argv) {
         test_jump_down_ends_standing(data);
         return failures ? 1 : 0;
     }
+    if (argc > 2 && std::string(argv[2]) == "--precise-aim") {
+        test_aiming(data);
+        test_precise_aim(data);
+        test_aim_mode(data);
+        std::printf(failures ? "%d failure(s)\n" : "all checks passed\n", failures);
+        return failures ? 1 : 0;
+    }
     if (argc > 2 && std::string(argv[2]) == "--conveyor") {
         test_conveyor_passenger(data);
         return failures ? 1 : 0;
@@ -5522,6 +5734,7 @@ int main(int argc, char** argv) {
     test_menu(data);
     test_load_from_menu(data);
     test_save_game(data);
+    test_auto_save_names(data);
     test_crate_destroyed(data);
     test_created_weapon_has_a_clip(data);
 
@@ -5593,6 +5806,7 @@ int main(int argc, char** argv) {
     test_other_map_npc_out_of_fast_area(data);
     test_processes_end_with_their_item(data);
     test_aiming(data);
+    test_precise_aim(data);
     test_aim_mode(data);
     test_aim_stick_draws(data);
     test_crosshair_shot_height(data);
