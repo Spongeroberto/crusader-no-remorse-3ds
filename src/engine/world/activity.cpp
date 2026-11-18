@@ -296,7 +296,7 @@ int range_if_visible(const World& world, ObjId item_id, ObjId other_id) {
     if (height > 1) to.z = (to.z + (height - 1) * 8) & 0xFF;
     const SweepResult r = sweep(world, item->shape, item_id, from, to, kSweepNoGround);
     if (r.blocker != other_id && r.blocker != 0) return 0;
-    int distance = std::max({std::abs(static_cast<std::int16_t>(from.x - to.x)),
+    int distance = std::max<std::int32_t>({std::abs(static_cast<std::int16_t>(from.x - to.x)),
                              std::abs(static_cast<std::int16_t>(from.y - to.y)), std::abs(from.z - to.z)}) / 16;
     if (distance & 0xF) ++distance;
     return distance < 0x31 ? distance : 0;

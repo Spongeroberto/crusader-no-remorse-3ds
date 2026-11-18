@@ -158,7 +158,7 @@ ObjId find_target(const World& world, ObjId shooter, int dir, bool sixteen_direc
                            : closest_direction_in_range(from->x, from->y, item->x, item->y, 8, 0, 7) * 2;
         if (to != dir) continue;
         const auto distance = static_cast<std::uint32_t>(
-            std::max({std::abs(static_cast<std::int16_t>(from->x - item->x)),
+            std::max<std::int32_t>({std::abs(static_cast<std::int16_t>(from->x - item->x)),
                       std::abs(static_cast<std::int16_t>(from->y - item->y)), std::abs((from->z & 0xFF) - (item->z & 0xFF))}));
         if (distance < best_distance || (npc && !found_npc) || (preferred && !found_preferred)) {
             if (reach_only && unreachable(id)) continue;
@@ -277,7 +277,7 @@ Pid fire_weapon(Kernel& kernel, World& world, const AnimDat& anims, ObjId shoote
             target.x += rnd_between(world, -spread, spread);
             target.y += rnd_between(world, -spread, spread);
             spread = std::min(spread / 3, kMaxZSpread);
-            target.z = std::clamp(target.z + rnd_between(world, -spread, spread), 0, kTopZ);
+            target.z = std::clamp<std::int32_t>(target.z + rnd_between(world, -spread, spread), 0, kTopZ);
         }
         auto projectile = std::make_unique<ProjectileProcess>(world, anims, shooter, origin, target, fire_type, damage,
                                                               projectile_frame(fire_type, dir, world));
@@ -359,7 +359,7 @@ void apply_damage(Kernel& kernel, World& world, const AnimDat& anims, ObjId targ
         const auto victim_record = world.npc_record(target);
         if (shooter && is_npc_id(attacker) && attacker == controlled && !victim_record.empty() &&
             (victim_record[npc::kCombatFlags] & 0x20)) {
-            const int distance = std::max({std::abs(static_cast<std::int16_t>(item->x - shooter->x)),
+            const int distance = std::max<std::int32_t>({std::abs(static_cast<std::int16_t>(item->x - shooter->x)),
                                            std::abs(static_cast<std::int16_t>(item->y - shooter->y)),
                                            std::abs((item->z & 0xFF) - (shooter->z & 0xFF))});
             if (distance <= 0x280 && world.is_partly_in_combat_zone(*item)) {
@@ -625,9 +625,9 @@ World::Point ProjectileProcess::homing_step() {
     } else {
         --velocity_.z;
     }
-    velocity_.x = std::clamp(velocity_.x, -0x20, 0x20);
-    velocity_.y = std::clamp(velocity_.y, -0x20, 0x20);
-    velocity_.z = std::clamp(velocity_.z, -0x10, 0x10);
+    velocity_.x = std::clamp<std::int32_t>(velocity_.x, -0x20, 0x20);
+    velocity_.y = std::clamp<std::int32_t>(velocity_.y, -0x20, 0x20);
+    velocity_.z = std::clamp<std::int32_t>(velocity_.z, -0x10, 0x10);
     const World::Point next{pos_.x + velocity_.x, pos_.y + velocity_.y, pos_.z + velocity_.z};
     if (!lost_) {
         const int d = direction_8(pos_.x, pos_.y, next.x, next.y);
@@ -671,7 +671,7 @@ void ProjectileProcess::run() {
                                 : World::Point{start_.x + (target_.x - start_.x) * step_ / steps_,
                                                start_.y + (target_.y - start_.y) * step_ / steps_,
                                                start_.z + (target_.z - start_.z) * step_ / steps_};
-    next.z = std::clamp(next.z, 0, kTopZ);
+    next.z = std::clamp<std::int32_t>(next.z, 0, kTopZ);
     ++step_;
     if (next.z == 0 || next.z == kTopZ || step_ >= range_) {
         impact(0);

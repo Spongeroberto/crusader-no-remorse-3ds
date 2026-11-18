@@ -64,7 +64,7 @@ int action_directions(const World& w, const AnimDat& anims, ObjId id, std::uint1
 }
 
 int chebyshev3(const Item& a, const Item& b) {
-    return std::max({std::abs(static_cast<std::int16_t>(a.x - b.x)), std::abs(static_cast<std::int16_t>(a.y - b.y)),
+    return std::max<std::int32_t>({std::abs(static_cast<std::int16_t>(a.x - b.x)), std::abs(static_cast<std::int16_t>(a.y - b.y)),
                      std::abs((a.z & 0xFF) - (b.z & 0xFF))});
 }
 

@@ -160,7 +160,7 @@ void splash_damage(Kernel& kernel, World& world, const AnimDat& anims, const Wor
         if (id == exclude2 && exclude2 != world.state.controlled_npc) continue;
         int dealt = damage;
         if (fire_type == 3 || fire_type == 4 || fire_type == 10) {
-            const int distance = std::max({std::abs(static_cast<std::int16_t>(at.x - item->x)),
+            const int distance = std::max<std::int32_t>({std::abs(static_cast<std::int16_t>(at.x - item->x)),
                                            std::abs(static_cast<std::int16_t>(at.y - item->y)),
                                            std::abs(at.z - (item->z & 0xFF))});
             const int steps = std::max(1, distance / 16 / 3);

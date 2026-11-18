@@ -357,7 +357,7 @@ bool ActorAnimProcess::step(bool skip_frames, bool& skipped_frames) {
     const int d = distance * 2;
     if (!in_place_ && (d != 0 || delta_z != 0)) {
         World::Point target{item->x + kDirectionDx[move_dir] * d, item->y + kDirectionDy[move_dir] * d,
-                            std::max(0, item->z + delta_z)};
+                            std::max<std::int32_t>(0, item->z + delta_z)};
         // In combat, an action flagged 0x80 (shape 0x33C) goes one unit up or
         // down per step towards its target's height (z wraps as a byte).
         if ((flags & 0x80) && in_combat(world_, owner())) {
@@ -495,7 +495,7 @@ ActionTest test_action(const World& world, const AnimDat& anims, ObjId actor, st
         if (!f) return done(false);
         const int d = f->distance * 2;
         const World::Point target{pos.x + kDirectionDx[move_dir] * d, pos.y + kDirectionDy[move_dir] * d,
-                                  std::max(0, pos.z + f->delta_z)};
+                                  std::max<std::int32_t>(0, pos.z + f->delta_z)};
         SweepResult r;
         if (f->ground_check) {
             r = try_move(world, actor, pos, target, kSweepSupportOnly | kSweepStepUp, goal);

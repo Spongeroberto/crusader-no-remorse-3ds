@@ -156,7 +156,7 @@ void AsylumMixer::mix(std::int16_t* out, std::size_t count) {
     for (std::size_t i = 0; i < count; ++i) {
         if (next_ >= buffer_.size()) fill();
         // The original sums into 16 bits and wraps; clamped here.
-        const int s = std::clamp(buffer_[next_++], -32768, 32767);
+        const int s = std::clamp<std::int32_t>(buffer_[next_++], -32768, 32767);
         if (filter_) {
             const int half = (s + 0x8000) >> 1;
             out[i] = static_cast<std::int16_t>(previous_half_ + half - 0x8000);

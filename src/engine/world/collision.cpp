@@ -247,7 +247,7 @@ SweepResult sweep(const World& world, std::uint16_t shape, ObjId mover, const Wo
     }
 
     if (s.result.blocker != 0) {
-        s.result.end = {start.x + s.best_dx, start.y + s.best_dy, std::clamp(start.z + s.best_dz, 0, kMaxZ)};
+        s.result.end = {start.x + s.best_dx, start.y + s.best_dy, std::clamp<std::int32_t>(start.z + s.best_dz, 0, kMaxZ)};
         s.result.done = {s.best_dx, s.best_dy, s.best_dz};
     }
     s.result.ok = s.ok && (!s.need_ground || (s.result.supported && !s.any_ground_below));
