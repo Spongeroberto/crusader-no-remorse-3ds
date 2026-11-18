@@ -52,8 +52,42 @@ bars; anything else is not a whole fraction), or show a 400×240 window of the w
 which changes what the player sees, and the combat area (640×480 around the camera) would
 then reach off screen.
 
+## Classic 3DS probe
+
+Measured 2026-11-18 with `platform/3ds/probe`, installed as a CIA (64 MB system mode) with
+the game data, movies left out, in its RomFS. Luma3DS, classic 3DS.
+
+| Measure | Result |
+| ------- | ------ |
+| Application memory | 64 MiB, all handed to the heaps at start-up |
+| Linear heap free | 30.5 MiB |
+| Largest single `malloc` | 31.25 MiB |
+| `std::filesystem` on newlib | works (lists `STATIC`) |
+| RomFS sequential read, 256 KiB blocks | 8.65 MiB/s |
+| RomFS random read, 4 KiB | 8.23 ms |
+| RomFS random read, 64 KiB | 16.96 ms |
+| RomFS random read, 256 KiB | 35.63 ms |
+
+**Memory is split in two halves.** libctru gives the 64 MiB to a linear heap (memory the
+GPU can read, for framebuffers and textures) and the ordinary `malloc` heap, about 31 MiB
+each. The engine's 69 MiB on PC does not fit in either half. The split is a choice:
+a program can set `__ctru_linear_heap_size`, and a 400×240 game picture needs only a few
+MiB of linear memory, so the `malloc` heap can grow to about 55 MiB in the 64 MB mode.
+The CIA's 80 MB and 96 MB system modes add more, at the cost of system features.
+
+**Every read costs about 8 ms before any data moves.** The random reads fit
+*time ≈ 7.7 ms + size ÷ 9 MiB/s*. Small reads waste almost all their time: 4 KiB reads
+deliver 0.5 MiB/s, 256 KiB reads 7 MiB/s. Loading single shapes from the file while
+playing would stall (100 shapes ≈ 0.8 s). Shapes must be read in few, large, sorted
+requests: the shapes a map uses at map load, the rest in bulk or on a loading screen.
+Loading all of `SHAPES.FLX` (40.3 MiB) would take about 5 s, but does not fit in memory.
+
+The probe also reads from `sdmc:/3ds/crusader/data` when that folder exists; it was
+absent, so SD card files outside the CIA are not measured yet.
+
 ## Next measurements
 
-- The same bench on a classic 3DS, once a homebrew build exists.
-- Memory with shapes loaded on demand.
+- The PC bench on a classic 3DS, once the engine builds for it.
+- Memory with shapes loaded per map.
+- Reads from plain SD card files, for comparison with RomFS.
 - Audio mixing and movie decoding cost; the bench skips both.
