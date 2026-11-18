@@ -5,6 +5,7 @@
 #include "engine/world/activity.hpp"
 #include "engine/world/actor_anim.hpp"
 #include "engine/world/collision.hpp"
+#include "engine/world/death_loot.hpp"
 #include "engine/world/gravity.hpp"
 #include "engine/world/inventory.hpp"
 #include "engine/world/render.hpp"
@@ -104,6 +105,9 @@ std::vector<std::uint16_t> register_item_intrinsics(UCMachine& m, World& w) {
     // Usecode events and process cleanup requested by the world.
     w.set_hooks({
         [&m, &w](ObjId id, std::uint16_t event) -> std::uint16_t {
+            // Port addition (death_loot.hpp): the events whose usecode starts
+            // NPCDEATH first drop the loot of a death without a body.
+            if (event == 0x0E || event == 0x0F) drop_death_loot(m.kernel(), w, id);
             const Item* item = w.get(id);
             return item ? m.call_event(w.usecode_class(*item), event, id) : 0;
         },
@@ -118,6 +122,18 @@ std::vector<std::uint16_t> register_item_intrinsics(UCMachine& m, World& w) {
             const Item* item = w.get(id);
             return item && m.usecode().has_class(w.usecode_class(*item)) &&
                    m.usecode().event_offset(w.usecode_class(*item), event) != 0;
+        };
+        hooks.call_class_event = [&m](std::string_view name, std::uint16_t event, ObjId id,
+                                      std::span<const std::uint8_t> args) {
+            const UsecodeFile& usecode = m.usecode();
+            for (std::size_t cid = 0; cid < usecode.class_count(); ++cid) {
+                const auto c = static_cast<std::uint16_t>(cid);
+                if (!usecode.has_class(c) || usecode.class_name(c) != name) continue;
+                if (usecode.event_offset(c, event) == 0) return false;
+                m.call_event(c, event, id, args);
+                return true;
+            }
+            return false;
         };
         w.set_hooks(hooks);
     }
@@ -296,7 +312,18 @@ std::vector<std::uint16_t> register_item_intrinsics(UCMachine& m, World& w) {
     }
     bind({0x011}, [](Item& i, Args) { return i.map_number; });  // Actor::I_getMap, same array as getMapArray
     bind({0x041}, [](Item& i, Args) { return i.map_number; });  // Egg::I_getEggId (1098:05C5), same array
-    bind({0x016}, [](Item& i, Args) { return i.shape; });
+    // Item::I_getShape (10A8:068F) reads the shape array with no check, so a
+    // destroyed item's free slot still gives its shape (No Regret's loot of
+    // dead NPCs depends on it).
+    m.set_intrinsic(0x016, [&w](UCMachine& machine, UCProcess&, Args a) -> std::uint32_t {
+        std::array<std::uint8_t, 2> id{};
+        if (!machine.dereference(arg32(a, 0), id)) return 0;
+        const ObjId obj = static_cast<ObjId>(id[0] | id[1] << 8);
+        if (const Item* item = w.get(obj)) return item->shape;
+        const Item* last = w.freed_slot(obj);
+        return last ? last->shape : 0;
+    });
+    bound.push_back(0x016);
     bind({0x024}, [&w](Item& i, Args a) { w.set_shape(i, arg16(a, 4)); return 0u; });
     bind({0x08D, 0x119}, [&w](Item& i, Args) { w.set_broken(i); return 0u; });
     bind({0x010, 0x02E, 0x068, 0x085, 0x0A2, 0x0AF, 0x0D9, 0x0EA, 0x12F},
@@ -364,10 +391,24 @@ std::vector<std::uint16_t> register_item_intrinsics(UCMachine& m, World& w) {
     bound.push_back(0x00A);
     // Container::I_destroyContents (10A8:14AF): for a container (family 6 or
     // 7), Item::I_destroy on each content (SHAPHAND_1090_05cb).
+    // Port addition (World::fix_original_bugs): on an NPC, its keycards
+    // (0x111) are put down where it stands instead. NPCDEATH gives the card of
+    // a group's keycard egg (0x4E7) to the first NPC of the group to die, then
+    // empties the NPCs that leave no body (the courier 0x45D, 0x385, 0x4E6):
+    // in mission 10, killing the courier first lost the green card 9.
     bind({0x02D}, [&m, &w](Item& i, Args) -> std::uint32_t {
         const std::uint8_t family = w.family_of(i.shape);
         if (family != kFamilyContainer && family != kFamilyActorContainer) return 0;
-        for (ObjId c : std::vector<ObjId>(i.contents)) destroy_item(m.kernel(), w, c);
+        const World::Point at = w.location(i);
+        for (ObjId c : std::vector<ObjId>(i.contents)) {
+            const Item* content = w.get(c);
+            if (w.fix_original_bugs() && is_npc_id(i.id) && content && content->shape == 0x111) {
+                w.push(c);
+                w.pop_to_coords(at.x, at.y, at.z);
+                continue;
+            }
+            destroy_item(m.kernel(), w, c);
+        }
         return 0;
     });
 

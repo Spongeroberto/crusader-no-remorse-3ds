@@ -62,6 +62,31 @@ public:
     // Port addition, written only when set: "togglerun", the Shift key switches
     // running on and off at each press instead of running while it is held.
     bool toggle_run = false;
+    // Port addition, written only when set: "impactmarks", shots leave marks
+    // on the scenery they hit (holes, burns, scorches; damage_marks.hpp).
+    bool impact_marks = false;
+    // Port addition, written only when set: "bloodmarks", the wounded bleed
+    // on the scenery (damage_marks.hpp).
+    bool blood_marks = false;
+    // Port addition, written only when set: "goremode", with the blood, much
+    // more of it (DamageMarks::bleed).
+    bool gore_mode = false;
+    // Port addition, written only when set: "casings", firearms eject
+    // casings that stay on the floor (casings.hpp).
+    bool casings = false;
+    // Port addition, a cheat written only when set: "remainsloot", an enemy
+    // burnt, melted, electrocuted or blown apart drops beside its remains the
+    // loot its body would have held (death_loot.hpp); the original destroys it.
+    bool remains_loot = false;
+    // Port addition, written only when set: "language", the language picked
+    // (language.hpp): the name of a folder of the languages folder, in lower
+    // case ("fr", "en", "pt-br"...); empty for AUTO (the data's).
+    std::string language;
+    // Port addition, written only when set: "fixoriginalbugs", bugs of the
+    // original game's scripts and data that can block a mission are corrected
+    // (enhancements.md, "Original game bug fixes"). Off, the port plays them as
+    // the original does.
+    bool fix_original_bugs = false;
     // Port addition, written when not 0: "viewzoom", the largest pixel size of
     // the native view, in hundredths of a screen pixel per game pixel (100 = x1,
     // 150 = x1.5, 200 = x2...); written as "1", "1.5", "2". 0 takes the biggest

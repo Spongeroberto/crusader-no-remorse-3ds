@@ -4,7 +4,9 @@
 //        mapview [data_dir] [map] --png out.png [cx cy]   one frame to a PNG
 //        mapview [data_dir] [map] --pick x y [cx cy]      items under a screen pixel
 //        mapview [data_dir] --save N [...]                state of SAVEGAME/SAVEGAME.N, centred on the player
-//        mapview [data_dir] [map] --find S                items of shape S on the map (id, frame, x, y, z)
+//        mapview [data_dir] [map] --find S                items of shape S, on the map or contained
+//        mapview [data_dir] [map] --item N                item N and the items it contains
+//        mapview [data_dir] [map] --near X Y R            items within R world units of (X, Y), with their class
 //   Right click: prints the items under the cursor (draw order, boxes).
 //   Arrows / mouse drag  scroll        PageUp/PageDown  previous/next map
 //   Home                 recentre      Esc              quit
@@ -16,12 +18,15 @@
 #include "core/typeflags.hpp"
 #include "core/xform.hpp"
 #include "engine/world/render.hpp"
+#include "engine/usecode/usecode_file.hpp"
 #include "engine/world/world.hpp"
 #include "platform/sdl_presenter.hpp"
 
 #include <SDL.h>
 
 #include <algorithm>
+#include <array>
+#include <cstdlib>
 #include <climits>
 #include <cstdio>
 #include <cstring>
@@ -84,11 +89,18 @@ int main(int argc, char** argv) {
     std::optional<int> save_slot;
     std::optional<Camera> forced;
     std::optional<int> find_shape;
+    std::optional<int> show_item;
+    std::optional<std::array<int, 3>> near;
     std::vector<std::string> pos;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--png") == 0 && i + 1 < argc) png = argv[++i];
         else if (std::strcmp(argv[i], "--cycles") == 0) show_cycles = true;
         else if (std::strcmp(argv[i], "--find") == 0 && i + 1 < argc) find_shape = std::stoi(argv[++i], nullptr, 0);
+        else if (std::strcmp(argv[i], "--item") == 0 && i + 1 < argc) show_item = std::stoi(argv[++i], nullptr, 0);
+        else if (std::strcmp(argv[i], "--near") == 0 && i + 3 < argc) {
+            const int nx = std::stoi(argv[++i]), ny = std::stoi(argv[++i]);
+            near = std::array{nx, ny, std::stoi(argv[++i])};
+        }
         else if (std::strcmp(argv[i], "--save") == 0 && i + 1 < argc) save_slot = std::stoi(argv[++i]);
         else if (std::strcmp(argv[i], "--pick") == 0 && i + 2 < argc) {
             const int px = std::stoi(argv[++i]);
@@ -135,9 +147,53 @@ int main(int argc, char** argv) {
         if (forced) camera = *forced;
         if (find_shape) {
             world->for_each([&](const Item& i) {
-                if (i.shape == *find_shape && !i.parent)
-                    std::printf("id %-5u frame %3u  camera %d %d  z %d\n", i.id, i.frame, world_from_usecode(i.x),
-                                world_from_usecode(i.y), i.z);
+                if (i.shape != *find_shape) return;
+                if (!i.parent)
+                    std::printf("id %-5u frame %3u  quality %u  flags 0x%04x  camera %d %d  z %d\n", i.id, i.frame,
+                                i.quality, i.flags,
+                                world_from_usecode(i.x), world_from_usecode(i.y), i.z);
+                else if (const Item* p = world->get(i.parent))
+                    std::printf("id %-5u frame %3u  quality %u  flags 0x%04x  in %u (shape %u, camera %d %d  z %d)\n",
+                                i.id, i.frame, i.quality, i.flags, i.parent, p->shape, world_from_usecode(p->x),
+                                world_from_usecode(p->y), p->z);
+                else
+                    std::printf("id %-5u frame %3u  quality %u  flags 0x%04x  in missing item %u\n", i.id, i.frame,
+                                i.quality, i.flags, i.parent);
+            });
+            return 0;
+        }
+        if (near) {
+            const auto usecode = UsecodeFile::from_flex(FlexArchive::open(data / "USECODE/EUSECODE.FLX"));
+            world->for_each([&](const Item& i) {
+                if (i.parent) return;
+                const int x = world_from_usecode(i.x), y = world_from_usecode(i.y);
+                if (std::abs(x - (*near)[0]) > (*near)[2] || std::abs(y - (*near)[1]) > (*near)[2]) return;
+                const std::string cls = usecode.has_class(i.shape) ? usecode.class_name(i.shape) : "";
+                const ShapeInfo* si = world->shape_info(i.shape);
+                const int fx = si ? si->footpad_x : 0, fy = si ? si->footpad_y : 0, fz = si ? si->footpad_z : 0;
+                std::printf("id %-5u shape %4u (0x%03x) frame %3u  quality %5u  npc %3u  family %2u  flags 0x%04x  "
+                            "box x[%d..%d] y[%d..%d] z[%d..%d]  %s\n",
+                            i.id, i.shape, i.shape, i.frame, i.quality, i.npc_number, world->family_of(i.shape),
+                            i.flags, x - fx * kFootpadXY, x, y - fy * kFootpadXY, y, i.z, i.z + fz * kFootpadZ,
+                            cls.c_str());
+            });
+            return 0;
+        }
+        if (show_item) {
+            auto print = [&](const Item& i, const char* indent) {
+                std::printf("%sid %-5u shape %4u frame %3u  quality %u  npc %u  map %u  flags 0x%04x  parent %u  "
+                            "camera %d %d  z %d\n",
+                            indent, i.id, i.shape, i.frame, i.quality, i.npc_number, i.map_number, i.flags, i.parent,
+                            world_from_usecode(i.x), world_from_usecode(i.y), i.z);
+            };
+            const Item* item = world->get(static_cast<ObjId>(*show_item));
+            if (!item) {
+                std::printf("no item %d\n", *show_item);
+                return 1;
+            }
+            print(*item, "");
+            world->for_each([&](const Item& i) {
+                if (i.parent == item->id) print(i, "  ");
             });
             return 0;
         }

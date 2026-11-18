@@ -67,9 +67,9 @@ WeaponVibration weapon_vibration(std::uint16_t shape) {
         return {32000, 22000, 85};
     case 0x332:  // SG-A1 shotgun
         return {60000, 48000, 130};
-    case 0x333:  // RP-22 rocket launcher
-    case 0x334:  // RP-32 rocket launcher
-        return {60000, 56000, 220};
+    case 0x333:  // RP-22 machine gun (fire type 1)
+    case 0x334:  // RP-32 machine gun (fire type 1)
+        return {44000, 34000, 110};
     case 0x388:  // GL-303 grenade launcher
         return {48000, 38000, 160};
     case 0x38C:  // EM-4
@@ -169,6 +169,21 @@ constexpr std::size_t kSavedGlobals = 0x42;
 // 1 s (kernel ticks, 60 a second) for the scripts to settle.
 constexpr std::uint32_t kAutosaveIconUs = 2'500'000;
 constexpr std::uint32_t kAutosaveDelayTicks = 60;
+// How long the autosave after a keypad waits at most for the scripts the
+// code started (a door slides in half a second): 10 s.
+constexpr std::uint32_t kAutosaveLineageTicks = 600;
+
+// The shapes that DOOR's event 0x21 moves (class 0x0A06, French usecode:
+// the shapes it compares with getShape), the doors, gates and walls that
+// TRIGGER opens and shuts. TRIGGER's event 0x22 waits until the item's
+// status bit 0x1000 is clear, sets it, runs that event and clears it again:
+// a lock held while the door moves.
+constexpr std::uint16_t kTriggerDoorShapes[] = {
+    0x005, 0x033, 0x046, 0x06C, 0x07B, 0x095, 0x099, 0x09C, 0x0A9, 0x0C2, 0x0CB, 0x0D0, 0x100, 0x107,
+    0x189, 0x193, 0x1AB, 0x1C7, 0x1ED, 0x1EE, 0x215, 0x289, 0x28F, 0x2D5, 0x2D6, 0x2DA, 0x2DB, 0x30A,
+    0x30B, 0x30E, 0x312, 0x368, 0x36B, 0x393, 0x394, 0x3AD, 0x3B9, 0x3BA, 0x3BD, 0x3BE, 0x3C6, 0x3C7,
+    0x3F8, 0x3FF, 0x400, 0x415, 0x428, 0x43F, 0x440, 0x46A, 0x46B, 0x46C, 0x4D8, 0x53B, 0x53C, 0x53D,
+    0x53E};
 constexpr int kFloppyScale = 2, kFloppyMargin = 8;
 
 std::vector<std::uint8_t> load_damage_table(const std::filesystem::path& file) {
@@ -192,54 +207,56 @@ std::filesystem::path game_file(const std::filesystem::path& data, const std::fi
 // @orig none: loads the data and builds the port's subsystems
 Game::Game(const std::filesystem::path& data, const std::filesystem::path& saves, const std::filesystem::path& mod,
            bool stream_shapes)
-    : shapes_flex_(stream_shapes ? FlexArchive{} : FlexArchive::open(game_file(data, mod, "STATIC/SHAPES.FLX"))),
-      shapes_file_(stream_shapes ? std::optional(FlexFile::open(game_file(data, mod, "STATIC/SHAPES.FLX")))
-                                 : std::nullopt),
-      globs_(FlexArchive::open(game_file(data, mod, "STATIC/GLOB.FLX"))),
-      fixed_(FlexArchive::open(game_file(data, mod, "STATIC/FIXED.DAT"))),
-      typeflags_(load_typeflags(game_file(data, mod, "STATIC/TYPEFLAG.DAT"))),
-      trig_(TrigTables::load(data / "STATIC/TRIG.DAT")),
-      damage_(load_damage_table(game_file(data, mod, "STATIC/DAMAGE.FLX"))),
-      anims_(AnimDat::load(game_file(data, mod, "STATIC/ANIM.DAT"))),
-      weapon_overlay_(WeaponOverlay::load(data / "STATIC/WPNOVLAY.DAT")),
-      palette_(Palette::load(data / "STATIC/GAMEPAL.PAL")),
-      usecode_(UsecodeFile::from_flex(FlexArchive::open(game_file(data, mod, "USECODE/EUSECODE.FLX")))),
+    : files_(data, mod, language_data_folder(GameConfig::load(data / "CRUSADER.CFG").language)),
+      shapes_flex_(stream_shapes ? FlexArchive{} : FlexArchive::open(files_.find("STATIC/SHAPES.FLX"))),
+      shapes_file_(stream_shapes ? std::optional(FlexFile::open(files_.find("STATIC/SHAPES.FLX"))) : std::nullopt),
+      globs_(FlexArchive::open(files_.find("STATIC/GLOB.FLX"))),
+      fixed_(FlexArchive::open(files_.find("STATIC/FIXED.DAT"))),
+      typeflags_(load_typeflags(files_.find("STATIC/TYPEFLAG.DAT"))),
+      trig_(TrigTables::load(files_.find("STATIC/TRIG.DAT"))),
+      damage_(load_damage_table(files_.find("STATIC/DAMAGE.FLX"))),
+      anims_(AnimDat::load(files_.find("STATIC/ANIM.DAT"))),
+      weapon_overlay_(WeaponOverlay::load(files_.find("STATIC/WPNOVLAY.DAT"))),
+      palette_(Palette::load(files_.find("STATIC/GAMEPAL.PAL"))),
+      usecode_(UsecodeFile::from_flex(FlexArchive::open(files_.find("USECODE/EUSECODE.FLX")))),
       shapes_(shapes_file_ ? ShapeCache(*shapes_file_, ShapeLayout::World) : ShapeCache(shapes_flex_, ShapeLayout::World)),
-      gumps_flex_(FlexArchive::open(data / "STATIC/GUMPS.FLX")),
+      gumps_flex_(FlexArchive::open(files_.find("STATIC/GUMPS.FLX"))),
       gumps_(gumps_flex_, ShapeLayout::Flat2D),
-      fonts_(FontSet::load(data / "STATIC/FONTS.FLX")),
-      xform_(XformTable::load(data / "STATIC/XFORMPAL.DAT")),
-      npc_types_(dtable::NpcTypes::load(game_file(data, mod, "STATIC/DTABLE.FLX"))),
+      fonts_(FontSet::load(files_.find("STATIC/FONTS.FLX"))),
+      xform_(XformTable::load(files_.find("STATIC/XFORMPAL.DAT"))),
+      npc_types_(dtable::NpcTypes::load(files_.find("STATIC/DTABLE.FLX"))),
       status_bar_(gumps_, fonts_, xform_, npc_types_),
       pickup_area_(gumps_, fonts_, xform_),
-      menu_palette_(Palette::load(data / "STATIC/MISC.PAL")),
-      difficulty_palette_(Palette::load(data / "STATIC/DIFF.PAL")),
-      cursor_(MouseCursor::load(data / "STATIC/MOUSE.SHP")),
+      menu_palette_(Palette::load(files_.find("STATIC/MISC.PAL"))),
+      difficulty_palette_(Palette::load(files_.find("STATIC/DIFF.PAL"))),
+      cursor_(MouseCursor::load(files_.find("STATIC/MOUSE.SHP"))),
       data_(data),
       mod_(mod),
       save_dir_(!saves.empty() ? saves : mod.empty() ? data / "SAVEGAME" : mod / "SAVEGAME"),
       config_(GameConfig::load(data / "CRUSADER.CFG")),
       save_names_(LoadScreen::read_names(save_dir_)),
-      credits_data_(CreditsData::load(data / "STATIC")),
-      help_pictures_(HelpScreen::Pictures::load(data / "STATIC")) {
+      credits_data_(CreditsData::load(files_)),
+      help_pictures_(HelpScreen::Pictures::load(files_)) {
     // The US data has no CRUSADER.CFG (the installer writes it): without one,
     // take the installer's choices, the doubled videos and the subtitles.
     if (!std::filesystem::exists(data / "CRUSADER.CFG")) config_.big_video = config_.subtitles = true;
     // dsfx_init: without SOUND.FLX the game runs silent, as with "sound=off".
-    if (std::filesystem::exists(data / "SOUND/SOUND.FLX")) {
-        audio_ = std::make_unique<Audio>(SoundFlex::open(data / "SOUND/SOUND.FLX"), data / "SOUND");
+    if (std::filesystem::exists(files_.find("SOUND/SOUND.FLX"))) {
+        audio_ = std::make_unique<Audio>(SoundFlex::open(files_.find("SOUND/SOUND.FLX")), data / "SOUND");
     }
     const DataInfo info = detect_data_info(data);
     // Without a known version, the usecode's intrinsics cannot be numbered:
     // played with the French numbers, other data calls the wrong routines.
     if (!info.known()) {
         throw std::runtime_error("unrecognised game data in '" + data.string() +
-                                 "': supported versions are French 1.08, US 1.23 and English 1.01");
+                                 "': supported versions are French 1.08, US 1.23, English 1.01 and German 1.07");
     }
     data_version_ = info.version;
     data_language_ = info.language;
     intrinsic_numbering_ = intrinsic_numbering(info);
     set_text_language(info.text_language());
+    // The language whose data files were read (port addition).
+    set_loaded_data_language(files_.language().empty() ? std::string() : config_.language);
     set_config(config_);
     reset_world();
 }
@@ -278,6 +295,10 @@ void Game::fire_frame(ObjId actor, int a, int b, int z) {
     }
     const int dir = r.empty() ? 0 : r[npc::kDirection];
     fire_weapon(*kernel_, *world_, anims_, actor, a * 16, b * 16, z * 8, dir, type, true);
+    // Port addition: the casing a firearm ejects.
+    if (config_.casings) {
+        casings_.eject(*world_, actor, a * 16, b * 16, z * 8, dir, ejection_of(type), kernel_->ticks());
+    }
     if (actor == world_->state.controlled_npc) {
         const WeaponVibration vibration = weapon_vibration(firing_shape);
         if (vibration.duration_ms != 0)
@@ -297,6 +318,8 @@ void Game::set_config(GameConfig config) {
         audio_->mixer.set_sound_volume(config_.sound_volume);
         audio_->mixer.set_filter(config_.filter);
     }
+    // The language of the port's texts (port addition).
+    select_language(config_.language);
 }
 
 // @orig 1028:03F6
@@ -432,6 +455,14 @@ void Game::reset_world() {
     hooks.got_hit = [this](ObjId item, ObjId other, std::uint16_t force) {
         got_hit(*kernel_, *world_, anims_, item, other, force);
     };
+    damage_marks_.clear();
+    casings_.clear();
+    hooks.shot_landed = [this](ObjId hit, std::int32_t x, std::int32_t y, std::int32_t z, int fire_type) {
+        if (config_.impact_marks) damage_marks_.record(*world_, hit, {x, y, z}, fire_type);
+    };
+    hooks.npc_wounded = [this](const Wound& wound) {
+        if (config_.blood_marks) damage_marks_.bleed(*world_, wound, config_.gore_mode);
+    };
     world_->set_hooks(hooks);
     menu_.reset();
     menu_process_ = nullptr;
@@ -442,6 +473,7 @@ void Game::reset_world() {
     screen_process_ = nullptr;
     sprites_suspended_ = false;
     autosave_pending_ = false;
+    autosave_lineage_ = 0;
 }
 
 // @orig none: port-only gamepad vibration
@@ -491,6 +523,8 @@ void Game::load_save_file(const std::filesystem::path& path) {
     world_->load_saved_items(save);
     const Item* player = world_->get(1);
     if (!player) throw std::runtime_error("saved game without the player (item 1)");
+    // 1058:02F1 ends by setting the BA-40's ammo type from the difficulty read.
+    dtable::set_difficulty(world_->state.difficulty);
     // Saves made by the port before World::destroy emptied equipment slots
     // keep the ids of spent clips in them (SEB22: four of the five ammunition
     // slots, so Weasel refused the GL-303 clips). The original never leaves
@@ -534,6 +568,54 @@ void Game::load_save_file(const std::filesystem::path& path) {
         world_->set_shape(*steam, 0x3A9);
         world_->set_frame(*steam, frame);
         steam->flags &= static_cast<std::uint16_t>(~0x1000);
+    }
+    // Status 0x1000 set by a running process of the item's class, which
+    // alone clears it; saved while it ran, the bit stays with no process.
+    // - A keypad (KEYPADNS, KEYPADEW) holds it while its KEYPAD script runs:
+    //   the keypad, then after the code a wait and the door's TRIGGER. use()
+    //   does nothing while it is set and the S selection skips it: the
+    //   keypad could never be used again, its door stayed shut. That run is
+    //   dropped: the code is entered again.
+    // - A running timer (TIMER, event 0x20) and a rolling roller (ROLLB_NS,
+    //   ROLLB_EW, event 0x21) loop while it is set; their start events and
+    //   enterFastArea skip them while it is: dead for good, nothing could
+    //   start them again. The loop is started again (the timer from the
+    //   start of its delay), once the TRIGGER locks below are released.
+    // Not here: FFFLOOR / FFFLOOR2 (bit 0x1000 is the floor's lasting
+    // state) and ELEVAT (a ride also holds the items on the platform).
+    const UsecodeFile& usecode = machine_->usecode();
+    std::vector<std::pair<ObjId, std::uint16_t>> restarts;
+    world_->for_each([&](const Item& i) {
+        if (!(i.flags & 0x1000) || i.parent || !usecode.has_class(i.shape)) return;
+        const std::string cls = usecode.class_name(i.shape);
+        if (cls == "KEYPADNS" || cls == "KEYPADEW") {
+            if (Item* keypad = world_->get(i.id)) keypad->flags &= static_cast<std::uint16_t>(~0x1000);
+        } else if (cls == "TIMER") {
+            restarts.emplace_back(i.id, std::uint16_t{0x20});
+        } else if (cls == "ROLLB_NS" || cls == "ROLLB_EW") {
+            restarts.emplace_back(i.id, std::uint16_t{0x21});
+        }
+    });
+    // Items saved while TRIGGER worked on them (its lock, status 0x1000, see
+    // kTriggerDoorShapes) kept the lock with no process to release it: the
+    // next TRIGGER waited for them forever, the keypad or switch did nothing
+    // and the door stayed shut (issue #18, an autosave made just after a
+    // keypad's code: door 618 and the 65 other items of its link, markers
+    // without usecode). The locks are those of the doors DOOR moves and of
+    // the linked items (quality low byte) without a usecode class: no
+    // script of their own uses the bit; the one such item found with it in
+    // the original saves, 0x4E1, has no link. The work is dropped, as the
+    // other processes: the keypad, already unlocked, opens the door again.
+    world_->for_each([this, &usecode](const Item& i) {
+        if (!(i.flags & 0x1000) || i.parent) return;
+        const bool door = std::find(std::begin(kTriggerDoorShapes), std::end(kTriggerDoorShapes), i.shape) !=
+                          std::end(kTriggerDoorShapes);
+        const bool linked_marker = !usecode.has_class(i.shape) && (i.quality & 0xFF) != 0;
+        if (!door && !linked_marker) return;
+        if (Item* locked = world_->get(i.id)) locked->flags &= static_cast<std::uint16_t>(~0x1000);
+    });
+    if (world_->hooks().start_event) {
+        for (const auto& [id, event] : restarts) world_->hooks().start_event(id, event);
     }
     world_->clear_fast_area();
     world_->set_camera(player->x, player->y, player->z);
@@ -651,7 +733,7 @@ void Game::autosave() {
         return;
     }
     try {
-        set_save_name(kAutoSave, tr("SAUVEGARDE AUTO", "AUTOSAVE"));
+        set_save_name(kAutoSave, tr("AUTOSAVE"));
         save_game(kAutoSave);
         autosave_icon_us_ = kAutosaveIconUs;
     } catch (const std::exception& e) {
@@ -770,7 +852,7 @@ void Game::new_game(int difficulty) {
     reset_world();
     // FLAG_1410_0051(0): the globals' initial values.
     {
-        std::ifstream in(game_file(data_, mod_, "USECODE/UNKDS.DAT"), std::ios::binary);
+        std::ifstream in(files_.find("USECODE/UNKDS.DAT"), std::ios::binary);
         const std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
         set_globals(bytes);
     }
@@ -778,6 +860,9 @@ void Game::new_game(int difficulty) {
     if (audio_) audio_->music.stop();
     GameState& s = world_->state;
     s.difficulty = static_cast<std::uint16_t>(difficulty >= 1 && difficulty <= 4 ? difficulty : 3);
+    // The difficulty screen's choice (13D0:2975 / 29B3): the BA-40 needs
+    // ammunition above level 1.
+    dtable::set_difficulty(s.difficulty);
     // Game_start: the colour cycling stays paused until the mission's
     // scripts fade the game palette in.
     s.cycle_paused = true;
@@ -816,6 +901,8 @@ void Game::update(std::uint32_t elapsed_us) {
     if (world_) {
         world_->set_follow_player(config_.follow_player);
         world_->set_precise_aim(config_.precise_aim);
+        world_->set_remains_loot(config_.remains_loot);
+        world_->set_fix_original_bugs(config_.fix_original_bugs);
     }
     // The right stick aims for whichever NPC is controlled (a robot taken over
     // too), with the fire key's conditions (CombatControl::handle_key): not
@@ -823,9 +910,7 @@ void Game::update(std::uint32_t elapsed_us) {
     const ObjId aim_npc = world_ ? world_->state.controlled_npc : 0;
     if (aim_stick_ && aim_npc != 0 && !modal() && !movie_ && !world_->is_dead(aim_npc) &&
         !(aim_npc == 1 && world_->state.avatar_in_stasis)) {
-        // Screen east is the world angle 315 degrees, north 225: 315 - screen.
-        aim_at_angle(*kernel_, *world_, anims_, static_cast<int>(std::lround(315.0 - aim_stick_deg_)),
-                     config_.draw_on_aim);
+        aim_at_angle(*kernel_, *world_, anims_, aim_stick_deg_, config_.draw_on_aim);
     } else if (world_) {
         drop_stick_crosshair(*world_);
     }
@@ -873,7 +958,13 @@ void Game::update(std::uint32_t elapsed_us) {
         left -= step;
         if (!more || movie_ || kernel_->slice_interrupted()) break;
     }
-    if (autosave_pending_ && kernel_->ticks() >= autosave_due_ && !modal() && player_may_act(*world_)) {
+    if (autosave_lineage_) {
+        bool running = false;
+        kernel_->for_each_process([&](const Process& p) { running |= p.lineage() == autosave_lineage_; });
+        if (!running || kernel_->ticks() >= autosave_give_up_) autosave_lineage_ = 0;
+    }
+    if (autosave_pending_ && kernel_->ticks() >= autosave_due_ && !autosave_lineage_ && !modal() &&
+        player_may_act(*world_)) {
         autosave_pending_ = false;
         autosave();
     }
@@ -922,15 +1013,14 @@ void Game::mix_elapsed(std::uint32_t elapsed_us) {
 void Game::play_movie(const std::string& name, MovieKind kind) {
     if (movie_) return;
     Surface8 screen(kScreenWidth, kScreenHeight);
-    render_view(screen);
+    render_view(screen, nullptr, true);
     start_movie(name, kind, std::move(screen));
 }
 
 // @orig 1468:03E3 1468:3ABC
 void Game::start_movie(const std::string& name, MovieKind kind, Surface8 screen) {
-    const std::filesystem::path base = data_ / "FLICS" / movie_base_name(name);
-    std::filesystem::path avi = base;
-    avi += ".AVI";
+    const std::string base = "FLICS/" + movie_base_name(name);
+    const std::filesystem::path avi = files_.find(base + ".AVI");
     std::optional<AviMovie> movie;
     try {
         movie = AviMovie::load(avi);
@@ -939,9 +1029,7 @@ void Game::start_movie(const std::string& name, MovieKind kind, Surface8 screen)
     }
     std::vector<MovieSubtitle> subtitles;
     if (config_.subtitles && kind != MovieKind::kOverlay) {
-        std::filesystem::path txt = base;
-        txt += ".TXT";
-        subtitles = load_movie_subtitles(txt, fonts_, MoviePlayer::kSubtitleFont);
+        subtitles = load_movie_subtitles(files_.find(base + ".TXT"), fonts_, MoviePlayer::kSubtitleFont);
     }
     movie_ = std::make_unique<MoviePlayer>(std::move(*movie), kind, std::move(subtitles), config_.big_video,
                                            std::move(screen), world_->state.screen_palette, gumps_, fonts_);
@@ -1184,12 +1272,16 @@ void Game::open_menu(bool no_game) {
     if (menu_) return;
     // WORLD_13e8_0e7d and 10c3: the status bar goes, the cursor shows.
     world_->state.status_bar_visible = false;
-    world_->state.cycle_paused = true;
     apply_status_bar_mouse_range();
     // IRGUMP_13d0_0000: running fades are stopped (Kernel_fail_processes,
     // type 0x206), the menu palette is written.
     kernel_->fail_processes(0, PaletteFaderProcess::kType, kernel_->level());
     world_->state.screen_palette = menu_palette_;
+    // Paused after the fades fail: a failed fade resumes the colour cycling
+    // (FADE_1440_0278), which would write the game's entries 1..14 over the
+    // menu palette. The original's menu is modal (Gump_run_modal), so its
+    // cycling never runs there.
+    world_->state.cycle_paused = true;
     key_daemon_->set_rate(kMenuDaemonRate);
     keyboard_.set_repeat_delay(kMenuRepeatDelay);
     keyboard_.reset();
@@ -1201,11 +1293,12 @@ void Game::open_menu(bool no_game) {
     menu_ = std::make_unique<MainMenu>(
         MainMenu::Resources{&gumps_, &fonts_, &save_names_, &credits_data_, &config_, audio_.get(),
                             [this] { save_config(); },
-                            port_version.empty() ? std::string() : tr("PORTAGE V", "PORT V") + port_version,
-                            tr("DONNEES DU JEU ", "GAME DATA ") +
-                                (data_version_.empty() ? std::string(tr("INCONNUES", "UNKNOWN")) : "V" + data_version_) + " " +
-                                (data_language_.empty() ? std::string(tr("LANGUE INCONNUE", "UNKNOWN LANGUAGE")) : data_language_),
-                            auto_save_name_function()},
+                            port_version.empty() ? std::string() : tr("PORT V") + port_version,
+                            std::string(tr("GAME DATA")) + " " +
+                                (data_version_.empty() ? std::string(tr("UNKNOWN")) : "V" + data_version_) + " " +
+                                (data_language_.empty() ? std::string(tr("UNKNOWN LANGUAGE")) : data_language_),
+                            auto_save_name_function(),
+                            christmas_ && (!audio_ || audio_->music.christmas_allowed())},
         menu_shared_, no_game);
     auto p = std::make_unique<ModalProcess>();
     menu_process_ = p.get();
@@ -1479,12 +1572,25 @@ void Game::show_keypad(std::int16_t code, Pid pid) {
         // 13C8:04EE: the keyboard and the mouse clicks flushed.
         keyboard_.reset();
         leave_menu_mode();
-        if (auto* p = dynamic_cast<UCProcess*>(kernel_->get(pid))) {
-            p->set_call_result(static_cast<std::uint16_t>(screen.result()));
-        }
+        auto* p = dynamic_cast<UCProcess*>(kernel_->get(pid));
+        if (p) p->set_call_result(static_cast<std::uint16_t>(screen.result()));
         // Port addition: the code matched, the door or chest is about to
-        // open (autosave).
-        if (code != 0 && static_cast<std::int16_t>(screen.result()) == code) autosave();
+        // open (autosave). Not at once: the KEYPAD script still holds the
+        // keypad's busy bit (0x1000) and has yet to open the door (a wait,
+        // then TRIGGER, whose processes slide the door while holding its
+        // lock, 0x1000 too, after the KEYPAD script has ended); saved
+        // before, the door stayed shut and the keypad dead (issue #18). The
+        // autosave waits until every process of that script's line has
+        // ended (Process::lineage), 10 s at most.
+        if (code != 0 && static_cast<std::int16_t>(screen.result()) == code) {
+            request_autosave();
+            if (p) {
+                if (++last_lineage_ == 0) ++last_lineage_;
+                autosave_lineage_ = last_lineage_;
+                autosave_give_up_ = kernel_->ticks() + kAutosaveLineageTicks;
+                p->set_lineage(autosave_lineage_);
+            }
+        }
     });
 }
 
@@ -1492,7 +1598,7 @@ void Game::show_keypad(std::int16_t code, Pid pid) {
 void Game::show_weasel(int level) {
     if (modal() || movie_) return;
     std::vector<std::uint8_t> stuff;
-    if (std::ifstream in{data_ / "STATIC" / "STUFF.DAT", std::ios::binary}) {
+    if (std::ifstream in{files_.find("STATIC/STUFF.DAT"), std::ios::binary}) {
         stuff.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
     }
     enter_menu_mode();
@@ -1517,7 +1623,7 @@ void Game::show_weasel(int level) {
 void Game::play_weasel_movie(const std::string& name) {
     if (movie_) return;
     Surface8 screen(kScreenWidth, kScreenHeight);
-    render_view(screen);
+    render_view(screen, nullptr, true);
     if (screen_) screen_->draw(screen);
     start_movie(name, MovieKind::kCutscene, std::move(screen));
     weasel_movie_ = movie_ != nullptr;
@@ -1702,29 +1808,69 @@ void Game::render(Surface8& screen, RenderStats* stats) {
 }
 
 // @orig 1188:12F1
-void Game::render_view(Surface8& screen, RenderStats* stats) {
+void Game::render_view(Surface8& screen, RenderStats* stats, bool keep_view) {
+    // Port (native resolution): resizing the view moves the fast area's
+    // edges. Under a modal screen (Weasel's shop) the items entering it would
+    // start their usecode (event 0x0F) at the screen's raised kernel level;
+    // an endless one (the booth's idle animation, type 0x21B) kept that level
+    // up after the shop, and the game below never ran again: the Silencer
+    // stayed in stasis (issue #13). Snapshots for a movie (640 x 480) and
+    // frames drawn under a modal screen keep the view, and show its centre.
+    const int view_w = world_->state.screen_right + 1, view_h = world_->state.screen_bottom + 1;
+    if ((keep_view || modal() || movie_) && (screen.width != view_w || screen.height != view_h)) {
+        Surface8 view(view_w, view_h);
+        render_view(view, stats, true);
+        screen.clear(0);
+        const int w = std::min(view_w, screen.width), h = std::min(view_h, screen.height);
+        copy_block(view, (view_w - w) / 2, (view_h - h) / 2, screen, (screen.width - w) / 2, (screen.height - h) / 2, w,
+                   h);
+        // The status bar, at the bottom of the large view, at the bottom of this one.
+        if (screen.width >= kScreenWidth && screen.height >= kScreenHeight) {
+            draw_window(screen, (screen.width - kScreenWidth) / 2, screen.height - kScreenHeight,
+                        [this](Surface8& s) { status_bar_.draw(s, *world_); });
+        }
+        return;
+    }
     screen.clear(0);
     world_->set_view_size(screen.width, screen.height);
     const GameState& s = world_->state;
     const auto list =
         build_display_list(*world_, shapes_, View{s.view_left, s.view_top}, screen.width, screen.height, stats);
+    // Port addition: the impact and blood marks and the casings on the
+    // floor, over each item just drawn; the casings in flight after their
+    // shooter.
+    if (config_.casings) casings_.advance(*world_, kernel_->ticks(), damage_marks_);
+    else casings_.clear();
+    const bool casings = config_.casings && !casings_.flying().empty();
+    const bool marks = config_.impact_marks || config_.blood_marks || config_.casings;
+    if (marks) {
+        damage_marks_.prepare(*world_, world_->state.game_palette, config_.impact_marks, config_.blood_marks,
+                              config_.casings);
+    } else if (damage_marks_.size() != 0) {
+        damage_marks_.clear();
+    }
     // DLIST.C 11A0:05xx: right after item 1, in combat (or holstering,
     // last action 0xB), its weapon (WPNOVLAY.DAT), unmirrored, at the item's
     // screen place plus the offsets of the current action, direction, frame.
-    draw_display_list(screen, list, &xform_, [this](Surface8& surface, const DrawItem& d) {
-        if (d.item->id != 1 || d.item->shape != 1) return;
-        const auto record = world_->npc_record(1);
-        const std::uint16_t last = static_cast<std::uint16_t>(record[npc::kLastAnim] | record[npc::kLastAnim + 1] << 8);
-        if (!in_combat(*world_, 1) && last != 0xB) return;
-        const Item* weapon = world_->get(world_->active_weapon(1));
-        const AnimAction* header = anims_.action(1, last);
-        if (!weapon || !header) return;
-        const auto piece =
-            weapon_overlay_.piece(weapon->shape, last, *header, world_->npc_direction(1), record[npc::kAnimFrame]);
-        if (!piece || (piece->shape == 0 && piece->frame == 0)) return;
-        const Shape* shape = shapes_.get(piece->shape);
-        if (!shape || piece->frame >= shape->frames().size()) return;
-        shape->frames()[piece->frame].draw(surface, d.sx + piece->dx, d.sy + piece->dy, false);
+    draw_display_list(screen, list, &xform_, [this, marks, casings](Surface8& surface, const DrawItem& d) {
+        if (marks) damage_marks_.draw(surface, d);
+        [&] {
+            if (d.item->id != 1 || d.item->shape != 1) return;
+            const auto record = world_->npc_record(1);
+            const std::uint16_t last =
+                static_cast<std::uint16_t>(record[npc::kLastAnim] | record[npc::kLastAnim + 1] << 8);
+            if (!in_combat(*world_, 1) && last != 0xB) return;
+            const Item* weapon = world_->get(world_->active_weapon(1));
+            const AnimAction* header = anims_.action(1, last);
+            if (!weapon || !header) return;
+            const auto piece =
+                weapon_overlay_.piece(weapon->shape, last, *header, world_->npc_direction(1), record[npc::kAnimFrame]);
+            if (!piece || (piece->shape == 0 && piece->frame == 0)) return;
+            const Shape* shape = shapes_.get(piece->shape);
+            if (!shape || piece->frame >= shape->frames().size()) return;
+            shape->frames()[piece->frame].draw(surface, d.sx + piece->dx, d.sy + piece->dy, false);
+        }();
+        if (casings) casings_.draw(surface, d, damage_marks_);
     });
     // SPMGR.C: the screen sprites (aiming mode), over the scene, unless
     // suspended in the menu mode (DS:2D8F).

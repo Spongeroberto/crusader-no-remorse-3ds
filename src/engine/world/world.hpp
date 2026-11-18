@@ -27,9 +27,11 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -194,6 +196,10 @@ struct GameState {
         int marked_dir = 0x10;         // DS:2890, direction of the last designation
         std::uint32_t checked_at = 0;  // DS:2891, tick of the last designation
         std::uint32_t timer_at = 0;    // DumbTimer +0x40
+        // Port addition (precise aim with the right stick): the target the
+        // stick points at on screen, which the shots of its direction take
+        // first (find_target). 0 when the stick points at none.
+        ObjId stick_target = 0;
     } aim;
     // The mouse turning the controlled NPC (world_mouse.hpp, 13E8:2A13):
     // set while the arrow key it sends is handled (DS:5FF6), with its rate
@@ -296,6 +302,18 @@ struct FastArea {
 
 class Audio;
 
+// Port addition (blood marks, damage_marks.hpp): an NPC that lost hit points
+// to a shot or a blast (WorldHooks::npc_wounded).
+struct Wound {
+    ObjId npc = 0;
+    int fire_type = 0;
+    // Where the shot came from, or the blast's centre (usecode units).
+    std::int32_t from_x = 0, from_y = 0, from_z = 0;
+    int dealt = 0;        // hit points lost
+    bool killed = false;  // down to 0
+    bool bleeds = false;  // a shape bullets fully hurt: not a robot
+};
+
 // Engine-to-usecode calls made by the world. Unset hooks do nothing.
 struct WorldHooks {
     // Starts usecode event `event` of the item's class if the class has it
@@ -349,6 +367,18 @@ struct WorldHooks {
     // `autosave_soon` once the player may act again (a mission start).
     std::function<void()> autosave;
     std::function<void()> autosave_soon;
+    // Port addition (impact marks, damage_marks.hpp): a shot of `fire_type`
+    // ended at (x, y, z) on `hit`, 0 when on nothing. Must not change the world.
+    std::function<void(ObjId hit, std::int32_t x, std::int32_t y, std::int32_t z, int fire_type)> shot_landed;
+    // Port addition (blood marks): an NPC lost hit points to a shot or a
+    // blast (report_wound). Must not change the world.
+    std::function<void(const Wound& wound)> npc_wounded;
+    // Port addition (loot from remains, death_loot.hpp): function `event` of
+    // the usecode class named `class_name` runs on `item` with `args`, at once
+    // until it first yields. False when the class has no such function.
+    std::function<bool(std::string_view class_name, std::uint16_t event, ObjId item,
+                       std::span<const std::uint8_t> args)>
+        call_class_event;
 };
 
 class World {
@@ -378,6 +408,11 @@ public:
     // taking the slot out of its free list.
     Item& add_with_id(Item item);
     void destroy(ObjId id);  // also destroys contents; the slot becomes free
+    // What a free slot held last (its item arrays are not cleared), or null.
+    const Item* freed_slot(ObjId id) const {
+        const auto it = stale_.find(id);
+        return it == stale_.end() ? nullptr : &it->second;
+    }
     std::size_t item_count() const { return items_.size(); }
 
     const ShapeInfo* shape_info(std::uint16_t shape) const {
@@ -600,6 +635,19 @@ public:
     // line of fire (find_target, designate).
     void set_precise_aim(bool on) { precise_aim_ = on; }
     bool precise_aim() const { return precise_aim_; }
+    // Port addition, the cheat "butin des restes" (death_loot.hpp): an enemy
+    // left without a body drops its loot beside its remains.
+    void set_remains_loot(bool on) { remains_loot_ = on; }
+    bool remains_loot() const { return remains_loot_; }
+    // The NPCs dead without a body whose loot has yet to drop, with the shape
+    // each had alive (death_loot.hpp). Not saved.
+    std::map<ObjId, std::uint16_t>& death_loot() { return death_loot_; }
+    // Port addition ("correctifs" in the enhancements window,
+    // GameConfig::fix_original_bugs): corrects bugs of the original game's
+    // scripts and data, e.g. Container::I_destroyContents on a dying NPC
+    // drops its keycards instead of destroying them.
+    void set_fix_original_bugs(bool on) { fix_original_bugs_ = on; }
+    bool fix_original_bugs() const { return fix_original_bugs_; }
     // The view is put on another target: the follow's goal, the old target's
     // place, is dropped. Following resumes when the new target moves.
     void stop_following() { follow_active_ = false; }
@@ -748,6 +796,9 @@ private:
     void set_camera_view(std::int32_t x, std::int32_t y, std::int32_t z, int left, int top);
     bool follow_player_ = false;
     bool precise_aim_ = false;
+    bool remains_loot_ = false;
+    std::map<ObjId, std::uint16_t> death_loot_;
+    bool fix_original_bugs_ = false;
     bool follow_active_ = false;  // follow_goal_ is set
     std::int32_t follow_goal_[3] = {0, 0, 0};
     struct FollowSample {

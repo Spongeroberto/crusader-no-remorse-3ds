@@ -10,6 +10,7 @@
 #include "engine/world/sprite_process.hpp"
 #include "engine/world/pathfind.hpp"
 #include "engine/world/collision.hpp"
+#include "engine/world/death_loot.hpp"
 #include "engine/world/gravity.hpp"
 
 #include <algorithm>
@@ -78,6 +79,8 @@ bool is_female(World& world, ObjId npc) {
     return !record.empty() && (record[0x5A] & 0x04);
 }
 
+}  // namespace
+
 // CRUSADER_1130_01f7: shapes that take full damage from bullets (not robots).
 // @orig 1130:01F7
 bool takes_full_bullet_damage(std::uint16_t shape) {
@@ -88,6 +91,24 @@ bool takes_full_bullet_damage(std::uint16_t shape) {
         return true;
     }
 }
+
+// @orig none: port-only blood marks
+WoundWatch watch_wound(const World& world, ObjId target) {
+    const Item* item = is_npc_id(target) && world.hooks().npc_wounded ? world.get(target) : nullptr;
+    if (!item) return {};
+    return {target, world.npc_hp(target), takes_full_bullet_damage(item->shape)};
+}
+
+// @orig none: port-only blood marks
+void report_wound(const World& world, const WoundWatch& before, int fire_type, const World::Point& from) {
+    if (before.npc == 0 || !world.hooks().npc_wounded || !world.get(before.npc)) return;
+    const int hp = world.npc_hp(before.npc);
+    if (hp >= before.hp) return;
+    world.hooks().npc_wounded(
+        Wound{before.npc, fire_type, from.x, from.y, from.z, before.hp - hp, hp == 0, before.bleeds});
+}
+
+namespace {
 
 // Sprite frame of the projectile by fire type (Item::I_fireWeapon).
 // @orig 1130:11DA
@@ -138,6 +159,25 @@ ObjId find_target(const World& world, ObjId shooter, int dir, bool sixteen_direc
         bool muzzle = false;
         return fire_distance(world, *anims, shooter, id, dir, 0, 0, 0, &muzzle) == 0 && muzzle;
     };
+    const auto direction_to = [&](const Item& item) {
+        return sixteen_directions ? closest_direction_in_range(from->x, from->y, item.x, item.y, 16, 0, 15)
+                                  : closest_direction_in_range(from->x, from->y, item.x, item.y, 8, 0, 7) * 2;
+    };
+    const auto distance_to = [&](const Item& item) {
+        return static_cast<std::uint32_t>(
+            std::max({std::abs(static_cast<std::int16_t>(from->x - item.x)),
+                      std::abs(static_cast<std::int16_t>(from->y - item.y)), std::abs((from->z & 0xFF) - (item.z & 0xFF))}));
+    };
+    // Port addition: the target the right stick points at on screen
+    // (aim_at_angle) goes first while it stays a fair one in this direction.
+    if (const ObjId picked = world.state.aim.stick_target; reach_only && picked != 0 && picked != shooter) {
+        const Item* item = world.get(picked);
+        const auto& slots = world.tracked();
+        if (item && std::find(slots.begin(), slots.end(), picked) != slots.end() &&
+            world.is_partly_in_combat_zone(*item) && direction_to(*item) == dir && distance_to(*item) <= 0x400 &&
+            !unreachable(picked))
+            return picked;
+    }
     std::uint32_t best_distance = 0xFFFF;
     ObjId best = 0;
     bool found_npc = false, found_preferred = false;
@@ -153,13 +193,8 @@ ObjId find_target(const World& world, ObjId shooter, int dir, bool sixteen_direc
         const bool preferred = info && info->is(ShapeInfo::kOccludes);  // ITEM_10a8_30a8
         if ((!npc && found_npc) || (!preferred && found_preferred)) continue;
         if (id == shooter || !world.is_partly_in_combat_zone(*item)) continue;
-        const int to = sixteen_directions
-                           ? closest_direction_in_range(from->x, from->y, item->x, item->y, 16, 0, 15)
-                           : closest_direction_in_range(from->x, from->y, item->x, item->y, 8, 0, 7) * 2;
-        if (to != dir) continue;
-        const auto distance = static_cast<std::uint32_t>(
-            std::max<std::int32_t>({std::abs(static_cast<std::int16_t>(from->x - item->x)),
-                      std::abs(static_cast<std::int16_t>(from->y - item->y)), std::abs((from->z & 0xFF) - (item->z & 0xFF))}));
+        if (direction_to(*item) != dir) continue;
+        const auto distance = distance_to(*item);
         if (distance < best_distance || (npc && !found_npc) || (preferred && !found_preferred)) {
             if (reach_only && unreachable(id)) continue;
             best_distance = distance;
@@ -220,6 +255,7 @@ Pid fire_weapon(Kernel& kernel, World& world, const AnimDat& anims, ObjId shoote
                 splash_damage(kernel, world, anims, origin, ft->splash(), random_damage(fire_type), fire_type, inside,
                               shooter);
             }
+            if (world.hooks().shot_landed) world.hooks().shot_landed(inside, origin.x, origin.y, origin.z, fire_type);
             if (ft->impact_sprite()) impact_sprite(kernel, world, fire_type, origin);
         }
         return 0;
@@ -444,6 +480,7 @@ void apply_damage(Kernel& kernel, World& world, const AnimDat& anims, ObjId targ
     }
     // Special deaths of humans (not the robot shapes), with VIOLENCE=1 (the
     // option string DS:0953 of the executable) where noted.
+    const std::uint16_t alive_shape = item->shape;  // port addition (death_loot.hpp)
     const bool human = takes_full_bullet_damage(item->shape);
     if (human && (fire_type == 3 || fire_type == 4 || fire_type == 10 || fire_type == 12)) {
         // Blown apart when the damage reaches a fraction of a damage roll of
@@ -473,6 +510,7 @@ void apply_damage(Kernel& kernel, World& world, const AnimDat& anims, ObjId targ
                 // Its screams come from the special frames of shape 0x576 (special_frame).
                 world.set_broken(*item);
                 record[npc::kFlags13] |= 0x01;
+                note_death_loot(kernel, world, anims, target, alive_shape);  // port addition
                 return;
             }
         }
@@ -522,6 +560,7 @@ void apply_damage(Kernel& kernel, World& world, const AnimDat& anims, ObjId targ
     }
     world.set_broken(*item);  // Item::I_setBroken
     record[npc::kFlags13] |= 0x01;  // Actor::I_setDead
+    note_death_loot(kernel, world, anims, target, alive_shape);  // port addition
 }
 
 // @orig 1140:06CE 1140:08C2
@@ -561,6 +600,32 @@ void ProjectileProcess::on_terminate() {
     sprite_ = 0;
 }
 
+// @orig 1140:1098
+void ProjectileProcess::impact(const World::Point& next, bool ignore_shooter) {
+    // The last step, from the current position to `next`, is swept again in
+    // parts of 16 (Chebyshev distance, rounded up): the first blocked part
+    // leaves the projectile where that part started and hits its blocker;
+    // none blocked, it ends at `next` and hits nothing. This is also what
+    // ends a shot that comes down to z 0: an item lying on the floor there,
+    // flat as a mine, is hit on the way down.
+    const int distance = chebyshev(pos_, next);
+    const int parts = std::max(1, distance / 16 + (distance % 16 != 0));
+    const World::Point from = pos_;
+    ObjId hit = 0;
+    for (int k = 1; k <= parts; ++k) {
+        const World::Point to{from.x + (next.x - from.x) * k / parts, from.y + (next.y - from.y) * k / parts,
+                              from.z + (next.z - from.z) * k / parts};
+        const ObjId mover = ignore_shooter ? shooter_ : sprite_;
+        const SweepResult r = sweep(world_, kProjectileShape, mover, pos_, to, kSweepNoGround);
+        if (r.blocker != 0) {
+            hit = r.blocker;
+            break;
+        }
+        pos_ = to;
+    }
+    impact(hit);
+}
+
 // @orig 1140:1098 1140:1E09
 void ProjectileProcess::impact(ObjId hit) {
     if (hit != 0) {
@@ -572,7 +637,9 @@ void ProjectileProcess::impact(ObjId hit) {
         const int dir = !is_npc_id(hit) ? crt_rnd(world_, 8)
                         : item          ? direction_8(pos_.x, pos_.y, item->x, item->y)
                                         : 0x10;
+        const WoundWatch wound = watch_wound(world_, hit);
         apply_damage(kernel(), world_, anims_, hit, shooter_, dir, damage_, fire_type_, &pos_);
+        report_wound(world_, wound, fire_type_, start_);
     }
     // SPRITE_1140_1e09: splash damage of the fire type around the impact,
     // sparing the item hit and the shooter (unless it is the controlled NPC).
@@ -580,6 +647,7 @@ void ProjectileProcess::impact(ObjId hit) {
     if (ft && ft->splash() != 0) {
         splash_damage(kernel(), world_, anims_, pos_, ft->splash(), damage_, fire_type_, hit, shooter_);
     }
+    if (world_.hooks().shot_landed) world_.hooks().shot_landed(hit, pos_.x, pos_.y, pos_.z, fire_type_);
     impact_sprite(kernel(), world_, fire_type_, pos_);
     terminate();
 }
@@ -645,6 +713,7 @@ bool ProjectileProcess::ricochet(ObjId blocker, const World::Point& at) {
     const Item* item = world_.get(blocker);
     const ShapeInfo* info = item ? world_.shape_info(item->shape) : nullptr;
     if (fire_type_ != 5 || !info || !info->is(ShapeInfo::kRoof) || ricochets_ >= 5) return false;
+    if (world_.hooks().shot_landed) world_.hooks().shot_landed(blocker, pos_.x, pos_.y, pos_.z, fire_type_);
     impact_sprite(kernel(), world_, fire_type_, at);
     int dx = target_.x - start_.x, dy = target_.y - start_.y;
     if (pos_.x < item->x - info->footpad_x * 16 + 1 || item->x < pos_.x) dx = -dx;
@@ -674,11 +743,12 @@ void ProjectileProcess::run() {
     next.z = std::clamp<std::int32_t>(next.z, 0, kTopZ);
     ++step_;
     if (next.z == 0 || next.z == kTopZ || step_ >= range_) {
-        impact(0);
+        impact(next, false);
         return;
     }
     SweepResult r = sweep(world_, kProjectileShape, sprite_, pos_, next, kSweepNoGround);
-    if (r.blocker == shooter_ && shooter_ != 0 && step_ < kShooterGrace) {
+    const bool shooter_aside = r.blocker == shooter_ && shooter_ != 0 && step_ < kShooterGrace;
+    if (shooter_aside) {
         // SPRITE_1140_151d: the shooter is set aside and the step retried.
         r = sweep(world_, kProjectileShape, shooter_, pos_, next, kSweepNoGround);
     }
@@ -689,8 +759,7 @@ void ProjectileProcess::run() {
         return;
     }
     if (ricochet(r.blocker, next)) return;
-    pos_ = r.end;
-    impact(r.blocker);
+    impact(next, shooter_aside);
 }
 
 }  // namespace crusader

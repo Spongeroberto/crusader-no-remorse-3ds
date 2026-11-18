@@ -1,6 +1,7 @@
 #include "engine/ui/main_menu.hpp"
 
 #include "core/language.hpp"
+#include "engine/ui/christmas_hat.hpp"
 #include "engine/ui/gump_keys.hpp"
 
 #include <cctype>
@@ -19,6 +20,11 @@ constexpr std::array<Point, MainMenu::kButtons> kButtonCorners = {{
 constexpr std::array<Point, MainMenu::kButtons> kButtonCornersUs = {{
     {46, 170}, {46, 221}, {46, 271}, {447, 178}, {490, 271}, {551, 318},
 }};
+// The German one "options", "credits" and "quit" for its German shapes
+// (13D0:02BD, 030E, 035F).
+constexpr std::array<Point, MainMenu::kButtons> kButtonCornersDe = {{
+    {46, 170}, {46, 221}, {46, 271}, {423, 178}, {456, 271}, {551, 318},
+}};
 constexpr int kVersionFont = 7, kVersionColour = 0x75;
 constexpr int kVersionY0 = 438, kVersionLineHeight = 16;
 constexpr std::array<Point, 4> kBackgroundCorners = {{{1, 120}, {320, 120}, {1, 240}, {320, 240}}};
@@ -36,7 +42,7 @@ MainMenu::MainMenu(const Resources& res, Shared& shared, bool no_game)
         const Shape* s = gumps_->get(static_cast<std::uint16_t>(kFirstButton + i));
         const int w = s && !s->frames().empty() ? s->frames()[0].width : 1;
         const int h = s && !s->frames().empty() ? s->frames()[0].height : 1;
-        const Point p = (us_version() ? kButtonCornersUs : kButtonCorners)[i];
+        const Point p = (us_version() ? kButtonCornersUs : german_version() ? kButtonCornersDe : kButtonCorners)[i];
         buttons_[i] = {p.x, p.y, p.x + w - 1, p.y + h - 1};
     }
 }
@@ -88,6 +94,7 @@ void MainMenu::draw(Surface8& screen) const {
             s->frames()[0].draw(screen, kBackgroundCorners[q].x, kBackgroundCorners[q].y);
         }
     }
+    if (res_.christmas_hat) draw_christmas_hat(screen, false);
     for (int i = 0; i < kButtons; ++i) {
         const Shape* s = gumps_->get(static_cast<std::uint16_t>(kFirstButton + i));
         const std::size_t frame = i == *selected_ ? 1 : 0;

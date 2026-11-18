@@ -23,12 +23,18 @@ The changes fall into four groups:
 5. [Camera follows the player](#5-camera-follows-the-player)
 6. [Native resolution](#6-native-resolution)
 7. [Zoom](#7-zoom)
+   - [7b. Impact marks](#7b-impact-marks)
+   - [7c. Casings](#7c-casings)
 8. [Autosave](#8-autosave)
+   - [8b. Language](#8b-language)
 9. [Toggle run](#9-toggle-run)
+   - [9b. Original game bug fixes](#9b-original-game-bug-fixes)
 10. [Keypad navigation with arrows or gamepad](#10-keypad-navigation-with-arrows-or-gamepad)
+   - [10b. Loot from remains (cheat)](#10b-loot-from-remains-cheat)
 11. [Window, fullscreen, mouse and picture](#11-window-fullscreen-mouse-and-picture)
 12. [Version lines on the main menu](#12-version-lines-on-the-main-menu)
-13. [Two game versions: French 1.08 and US 1.23](#13-two-game-versions-french-108-and-us-123)
+   - [12b. Christmas hat](#12b-christmas-hat)
+13. [Game versions: French 1.08, US 1.23 and German 1.07](#13-game-versions-french-108-us-123-and-german-107)
 14. [Installing from a CD image, no CD needed](#14-installing-from-a-cd-image-no-cd-needed)
 15. [Start-up, command line and tools](#15-start-up-command-line-and-tools)
 16. [`CRUSADER.CFG` handling](#16-crusadercfg-handling)
@@ -51,31 +57,61 @@ The original has nothing like it. This screen gathers every option the port adds
 - If the fonts are not loaded, the button is not shown.
 
 **Look**
-- The screen is cleared. A double red frame (colour `0x57`, corners cut over 3 pixels like the original buttons) fills (100,34)–(539,465).
-- The title is green (`0x0C`), with the "+" icon.
-- 14 rows, 26 px apart. The focused row is bright green (`0x0C`); the others are dark green (`0x75`).
+- The screen is cleared. A double red frame (colour `0x57`, corners cut over 3 pixels like the original buttons) starts at (100,34), 439 px wide; it ends 22 px below the last row (at y 465 at most).
+- The title is green (`0x0C`), with the "+" icon: ENHANCEMENTS (French: AMELIORATIONS) on the first page, the page's name on the others.
+- Rows 26 px apart, 9 at most on a page, BACK / RETOUR last. The focused row is bright green (`0x0C`); the others are dark green (`0x75`).
 - An on/off option shows its name on the left and its value on the right: ON / OFF (French: MARCHE / ARRET).
 
-| # | Row (EN / FR) | Effect | CFG key |
-|---|---|---|---|
-| 0 | CONTROLLER / MANETTE | Opens the controller screen | — |
-| 1 | CAMERA FOLLOW / SUIVI CAMERA | Toggles camera follow | `followplayer` |
-| 2 | DIRECTIONAL MOVE / MODE DIRECTIONNEL | Toggles directional movement | `directionalmove` |
-| 3 | DIRECTIONAL AIM / VISEE DIRECTIONNELLE | Toggles directional aiming | `directionalaim` |
-| 4 | DRAW ON AIM / DEGAINE EN VISANT | Draws the weapon when the aim stick is pushed | `drawonaim` |
-| 5 | PRECISE AIM / VISEE PRECISE | Shots only lock on a target they can reach | `preciseaim` |
-| 6 | NATIVE RESOLUTION / RESOLUTION NATIVE | Toggles native resolution | `nativeresolution` |
-| 7 | ZOOM | Cycles AUTO → x1 → x1.5 → x2 → … → xN → AUTO | `viewzoom` |
-| 8 | SMOOTHING / LISSAGE | Bilinear filtering of the picture | `smoothscaling` |
-| 9 | AUTOSAVE / SAUVEGARDE AUTO | Toggles the autosave | `autosave` |
-| 10 | TOGGLE RUN / COURSE PERMANENTE | Toggles toggle-run mode | `togglerun` |
-| 11 | VIBRATION / VIBRATIONS | Controller rumble | `vibration` |
-| 12 | INTENSITY / INTENSITE | Rumble strength, 0 to 100 % by 10 (left / right) | `vibrationintensity` |
-| 13 | BACK / RETOUR | Closes the screen | — |
+**Pages.** The first page has one row per page: CONTROLS / CONTROLES, DISPLAY / AFFICHAGE, EFFECTS / EFFETS, GAME / JEU, CHEATS / TRICHE, then BACK / RETOUR, which closes the window.
+
+*CONTROLS / CONTROLES*
+
+| Row (EN / FR) | Effect | CFG key |
+|---|---|---|
+| CONTROLLER / MANETTE | Opens the controller screen | — |
+| DIRECTIONAL MOVE / MODE DIRECTIONNEL | Toggles directional movement | `directionalmove` |
+| DIRECTIONAL AIM / VISEE DIRECTIONNELLE | Toggles directional aiming | `directionalaim` |
+| DRAW ON AIM / DEGAINE EN VISANT | Draws the weapon when the aim stick is pushed | `drawonaim` |
+| PRECISE AIM / VISEE PRECISE | Shots only lock on a target they can reach | `preciseaim` |
+| TOGGLE RUN / COURSE PERMANENTE | Toggles toggle-run mode | `togglerun` |
+| VIBRATION / VIBRATIONS | Controller rumble | `vibration` |
+| INTENSITY / INTENSITE | Rumble strength, 0 to 100 % by 10 (left / right) | `vibrationintensity` |
+
+*DISPLAY / AFFICHAGE*
+
+| Row (EN / FR) | Effect | CFG key |
+|---|---|---|
+| NATIVE RESOLUTION / RESOLUTION NATIVE | Toggles native resolution | `nativeresolution` |
+| ZOOM | Cycles AUTO → x1 → x1.5 → x2 → … → xN → AUTO | `viewzoom` |
+| SMOOTHING / LISSAGE | Bilinear filtering of the picture | `smoothscaling` |
+| CAMERA FOLLOW / SUIVI CAMERA | Toggles camera follow | `followplayer` |
+
+*EFFECTS / EFFETS*
+
+| Row (EN / FR) | Effect | CFG key |
+|---|---|---|
+| IMPACT MARKS / IMPACTS | Shots leave marks on the scenery | `impactmarks` |
+| BLOOD / SANG | Cycles OFF → ON (the wounded bleed on the scenery) → GORE (much more blood) | `bloodmarks`, `goremode` |
+| CASINGS / DOUILLES | Firearms eject casings that stay on the floor (section 7c) | `casings` |
+
+*GAME / JEU*
+
+| Row (EN / FR) | Effect | CFG key |
+|---|---|---|
+| AUTOSAVE / SAUVEGARDE AUTO | Toggles the autosave | `autosave` |
+| ORIGINAL BUG FIXES / CORRECTIFS ORIGINAL | Corrects bugs of the original game that can block a mission | `fixoriginalbugs` |
+| LANGUAGE / LANGUE | Cycles the language: AUTO → each folder of `languages` → AUTO; a language's game files need a restart (section 8b) | `language` |
+
+*CHEATS / TRICHE*
+
+| Row (EN / FR) | Effect | CFG key |
+|---|---|---|
+| LOOT FROM REMAINS / BUTIN DES CENDRES | An enemy burnt, blown apart or vaporised drops its loot beside its remains (section 10b) | `remainsloot` |
 
 **Controls**
 - Up or `8`, down or `2`: moves between rows. The focus stops at the first and last row; it does not wrap.
-- Enter activates the row. Escape closes the screen.
+- Enter activates the row: opens a page, toggles an option. A page opens on its first row.
+- Escape, or BACK / RETOUR, goes back from a page to the first page, with that page's row focused; on the first page it closes the window.
 - Mouse: clicking a row focuses and activates it.
 - While the controller screen is open, it receives every event until it closes.
 - Changes apply to the in-memory configuration at once. They are written to `CRUSADER.CFG` when the Options screen closes, like the original options.
@@ -87,7 +123,7 @@ The original has nothing like it. This screen gathers every option the port adds
 **Files:** `src/core/pad_config.hpp`, `src/platform/sdl_gamepad.*`, `src/engine/ui/gamepad_screen.*`
 
 The original only supports the PC game-port joystick, which the port does not reproduce. The port supports any controller that `SDL_GameController` recognises (Xbox and compatibles), with hot-plugging.
-The Enhancements window lets players enable or disable controller rumble and set its intensity in 10% steps with the left/right keys (or by clicking the row). The controller briefly rumbles to preview each selected level. Explosions scale with their size; firing the player's rocket launcher produces a sustained pulse, slightly weaker than a large explosion. The controlled character also rumbles when actually losing hit points, but not when a shield fully absorbs the hit.
+The Enhancements window lets players enable or disable controller rumble and set its intensity in 10% steps with the left/right keys (or by clicking the row). The controller briefly rumbles to preview each selected level. Explosions scale with their size. Each shot of the player's weapon gives its own pulse: light for the energy weapons and the BA-40, medium for the BA-41, AC-88, AR-7, RP-22 and RP-32 (the RP-22 and RP-32 are machine guns, not rocket launchers: they fire bullets), strong for the SG-A1 and the GL-303. The controlled character also rumbles when actually losing hit points, but not when a shield fully absorbs the hit.
 
 ### 2.1 How it works
 Each controller input is **translated into a key, or a key combination, of the original controls**. The engine receives ordinary keyboard or mouse events and has no controller-specific logic.
@@ -168,14 +204,14 @@ Holding **Select + Start** together quits the game. It is the only way out on ha
 
 ### 2.8b Save names without a keyboard (PortMaster)
 Handhelds have no keyboard to type a save's name, and the original refuses to save under an empty one. With **`--auto-save-names`**, which only the PortMaster launcher (`Crusader.sh`) passes:
-- choosing a slot on the Save screen (F9 or the menu's "save game") proposes the **local date and time** as its name, in place of the slot's: `12/11/2026 14:32` (French: day first), `11/12/2026 14:32` (US: month first);
+- choosing a slot on the Save screen (F9 or the menu's "save game") proposes the **local date and time** as its name, in place of the slot's: `12/11/2026 14:32` (French: day first), `11/12/2026 14:32` (US: month first), `12.11.2026 14:32` (German);
 - **A** saves under it, **B** leaves the slot as it was; a keyboard plugged in can still edit the name;
 - a console whose clock is not set (before 2020) gets `SAUVEGARDE` / `SAVED GAME` instead.
 
 Files: `src/engine/ui/load_screen.*` (`set_auto_name`, `dated_name`), `src/game/game.cpp` (`auto_save_name_function`), `src/game/main.cpp`.
 
 ### 2.9 Controller screen
-- Opened from row 0 of the Enhancements screen.
+- Opened from the first row (CONTROLLER / MANETTE) of the Enhancements screen's CONTROLS / CONTROLES page.
 - Two columns, rows 18 px apart:
   - on the left, the 22 actions, then "aim speed", "dead zone", "defaults" and "back";
   - on the right, the bound input ("A", "LB", … or "NONE"), or `< n / 5 >` for the two stick settings.
@@ -233,15 +269,16 @@ The right stick puts the crosshair directly in the direction it points.
 - In play only. In this mode the right stick **no longer turns** the avatar and **no longer moves the mouse**.
 - On above 16000, off below 10000 (hysteresis).
 - With **DRAW ON AIM** on, pushing the stick while the weapon is holstered **draws it at once** (action `7`, remapped by the weapon), exactly as the fire key does, and the aim mode follows. The trigger no longer has to be pressed first. If the avatar is busy (walking, rolling...) the draw waits until it is free while the stick stays pushed. Switched off, the stick does nothing until the trigger has drawn the weapon, as before.
-- Angle conversion: world angle = `315° − screen angle`, because screen east is 315° in the world.
+- Angle conversion (`world_angle_of_screen`): the crosshair goes **where the stick points on screen**, at the muzzle's height. The isometric view shows a step `(x, y)` on the ground as `(x − y, (x + y) / 2)` (y down), so the conversion inverts that projection: screen east is 315° in the world, south 45°, but the world's axes show 26.6° off the screen's horizontal, not 45°. (A mere rotation, `315° − screen angle`, was up to 18.4° off along the world's axes, the corridors' directions: a target there fell in the next 16-way direction.)
 - On each update, `aim_at_angle` applies when all of these hold:
   - aiming (combat) mode is active, or the weapon is holstered, **DRAW ON AIM** is on and the avatar is free (it is then drawn);
   - standing up is not forbidden and no turn-around is in progress;
   - no modal window or cutscene is open;
   - the player is not in stasis and controls the Silencer (NPC 1).
-- The crosshair is moved when the angle changes.
-- If the avatar does not face the crosshair (16-way direction measured from its feet) and is not busy, it turns with its guard animation: `0x2E` kneeling, `4` standing.
-- If target designation is active, the target search runs again after the turn.
+- The crosshair is placed again on every update (it follows the avatar when it strafes).
+- With **PRECISE AIM**, the stick also picks a target on screen (see [4b](#4b-precise-aim)): the crosshair then points at it on the ground.
+- If the avatar does not face the crosshair (16-way direction measured from its centre; that of the target picked by the stick) and is not busy, it turns with its guard animation: `0x2E` kneeling, `4` standing.
+- If target designation is active, the target search runs again after the turn, or at once when the stick picks another target in the same direction.
 - **Leaving the aiming mode**: releasing the stick does not leave it, as in the original. Walking with the left stick (not aiming) leaves it at once; a **side step** or a **roll** leaves it for the duration of the animation. To put the weapon away, double-click the **right mouse button**; on the controller, the **jump** action (B by default) holsters a drawn weapon first, then jumps.
 
 ---
@@ -249,7 +286,7 @@ The right stick puts the crosshair directly in the direction it points.
 ## 4b. Precise aim
 
 **Option:** PRECISE AIM / VISEE PRECISE (`preciseaim`, off by default)
-**Files:** `src/engine/world/projectile.cpp` (`find_target`), `src/engine/world/aim_mode.cpp` (`designate`)
+**Files:** `src/engine/world/projectile.cpp` (`find_target`), `src/engine/world/aim_mode.cpp` (`designate`, `stick_pick`)
 
 In the original, a shot of the player locks on the **nearest** target in the 16-way direction it is fired in (`TRACKER_1128_0158`), wherever it is in height and whether or not it can be reached. In levels with several floors, the nearest enemy is often one floor up or down, behind the slab: the shot flies to it and ends in the floor or the ceiling, while the enemy in sight on the player's floor is left alone. A nearer enemy behind a wall does the same.
 
@@ -260,6 +297,16 @@ In the original, a shot of the player locks on the **nearest** target in the 16-
 - A shooter whose shot animation has no firing frame is not filtered (the test cannot be made).
 - The target marker (target designation, **R**) uses the same search, so it **always shows the target the shot goes to**. The original quirk where a new target in an unchanged direction stayed unmarked is left out with the option.
 - Unchanged: the 16 (or 8) directions, the 0x400 range, the spread of the shots.
+
+**With the right stick (directional aiming)**
+
+The search above works on the ground, in 16-way directions. A target on another floor does not show where its place on the ground is: one floor below (96 units) it shows 96 pixels lower, and pointing the stick at it gave another direction. With the option, the stick picks its target **as the screen shows it**:
+- The candidates are those the search could take (tracked, in the combat zone, within 0x400) that the avatar has a line of fire to, each in its own direction.
+- Each is seen from the crosshair's centre (the avatar's centre, at the muzzle's height) to its aim point, projected with its height. The one nearest in angle to the stick, **within 20°**, is taken; the one already taken stays unless another is more than 5° nearer.
+- The avatar faces it (in the 16-way direction the search sees it in), the crosshair points at it on the ground, and as long as it stays in that direction the shots take it **first** (`GameState::Aim::stick_target`), as does the marker.
+- No such target: the crosshair goes where the stick points, as without the option.
+- The stick target is dropped when the aiming mode is left.
+- Test: `test_stick_aim_floor_below` (save `visee-etage-inferieur.sav`: the Silencer on a catwalk, a soldier on the floor below; a camera in the next direction stays out of reach behind a pillar).
 
 ---
 
@@ -314,6 +361,61 @@ Zoom sets the **maximum size of a game pixel** in native resolution.
 
 ---
 
+## 7b. Impact marks
+
+**Options:** IMPACT MARKS / IMPACTS (`impactmarks`) and BLOOD / SANG (`bloodmarks`), both off by default and independent: either can be on without the other. Switching one off forgets its own marks only.
+**Files:** `src/engine/world/damage_marks.*`, `src/engine/world/projectile.cpp`, `src/engine/world/item_damage.cpp`, `src/game/game.cpp`
+
+The original leaves no trace of a shot. With this option the scenery keeps one where a shot ends.
+
+**Marks**
+- **Bullets** (fire types 1, 2, 0xB, 0xD): a hole of about 2 × 2 black pixels with a dark rim and a few chips.
+- **Explosions** (any fire type that splashes: rockets, grenades…): a scorch with a ragged edge, black in the middle. Its radius is 3 × the splash radius, 10 to 32 pixels. It covers the item hit and the scenery around it: a floor gets a scorch squashed to the ground, centred under the blast; a wall face gets it centred across from the blast. The further the face, the smaller the scorch (a quarter of a pixel less per unit). At most 24 items per explosion.
+- **Energy weapons** (every other fire type: lasers, plasma, electric…): a small burn, 3 pixels in radius.
+- A shot that hits nothing marks the floor right under where it ends, if there is one within 16 units below.
+
+**Rules**
+- The mark belongs to the item it lands on and is drawn just after it, inside its opaque pixels, by darkening them through the game palette. Whatever stands in front of the item covers the mark too.
+- Only scenery takes marks: not NPCs, shots, translucent shapes (windows, force fields) or editor markers. A face the camera does not see (the back of a wall) takes none.
+- A mark goes away when its item moves, changes frame or shape, flips or is destroyed. It also goes on a map change, a load, or when the option is switched off. Past 1024 marks the oldest go first.
+- Marks are not saved: a loaded game starts clean.
+- Marks only read the world and use their own numbers, never the game's random generators, so the game plays the same with or without them.
+- Palette colours 1..14 (cycled or translucent) are never changed or used.
+
+**Blood** (option BLOOD / SANG, `bloodmarks`, `goremode`, off by default; ON or GORE)
+- Who bleeds: an NPC that loses hit points to a shot or a blast, if bullets hurt it fully (the living, not the robots). Energy weapons do not draw blood: they burn, freeze or melt. Blood is drawn in the game palette's reds, mixed with the colour underneath.
+- **A bullet** (or a blast that does not kill): a spray on the first wall behind the victim, along the shot, at chest height, with drips running down: within 48 + 2 × the hit points lost (up to 150 units), always when the hit kills, 75 % of the time otherwise. Drops, stretched the way they flew, land on the floor behind: 2, plus 1 per 10 points lost, plus 2 for a kill (7 at most). A kill leaves a pool under the body.
+- **Killed by a blast**: a bigger pool under the body; 18 to 26 pieces and drops thrown up to 150 units away, in a fan of ±80° away from the blast; sprays on the walls met by seven rays across that fan.
+- **GORE**: every bullet sprays the wall behind, within 80 + 3 × the points lost (up to 200 units), bigger; 4 drops plus 1 per 6 points lost, plus 4 for a kill (14 at most), thrown further. A bullet kill adds two sprays 25° to the sides, a bigger pool and 6 to 10 pieces thrown behind. A blast kill: 32 to 44 pieces up to 200 units away in a fan of ±100°, sprays along thirteen rays, a pool up to 20 pixels.
+- A wall face the camera does not see takes no spray. Blood marks follow the impact marks' rules: on scenery only, gone when it changes, not saved.
+
+## 7c. Casings
+
+**Option:** CASINGS / DOUILLES (`casings`), off by default, independent of the impact marks and the blood.
+**Files:** `src/engine/world/casings.*`, `src/engine/world/damage_marks.*`, `src/game/game.cpp`
+
+The original ejects nothing. With this option every shot of a firearm throws out a casing that stays on the floor.
+
+**Which weapons**
+- The weapons that fire bullets (fire types 1, 2, 0xB, 0xD, the same as the bullet holes of section 7b). BA-40, BA-41 (type 0xB), RP-22 and RP-32 (type 1) eject a brass casing. SG-A1 (type 2) and AC-88 (type 0xD) fire several pellets and eject a red shell with a brass head.
+- Energy weapons and explosives (PA-21, EM-4, PL-1, PA-31, UV-9, AR-7, GL-303) eject nothing.
+- Whoever fires ejects: the player, an NPC or a robot. The pump of the SG-A1 is not shown: its shell flies out with the shot.
+
+**Flight**
+- One casing per firing frame of the animation (one per shot, one shell per shotgun blast).
+- It starts at the muzzle, pulled back towards the shooter, and flies out to the shooter's right (a quarter turn clockwise from its facing), a little back, and up: 1.2 to 2.2 units a tick sideways, -0.2 to 0.7 back, 2.2 to 3.4 up, with a gravity of 0.32 units a tick per tick. It spins a quarter turn every two ticks.
+- It falls to the height of the shooter's feet at the time of the shot, bounces once (30 % of its speed down, half its speed along the ground), then lands. A flight never lasts more than 120 ticks.
+- It moves one step per game tick (60 a second), so it freezes when the game does (menus, pause).
+- In flight it is drawn right after its shooter (after the player's weapon overlay), so whatever stands in front of the shooter covers it. A casing whose shooter is not drawn is not seen. At most 64 fly at once; past that the oldest goes.
+
+**On the floor**
+- A landed casing becomes a mark on the floor right under it (at most 16 units below; down a ledge there is none, and it is lost). A casing is two pixels (bright brass and dark brass), a shell three (dark red, red, brass), each with one pixel of shadow, lying one of four ways.
+- Unlike the other marks, it replaces the colour underneath with the palette's nearest brass or red, instead of darkening it.
+- It follows the impact marks' rules: drawn inside the floor's opaque pixels, covered by what stands in front, gone on a map change, a load, or when the option is switched off; not saved. At most 512 casings lie on a map; past that the oldest goes, and the other marks stay.
+- Casings only read the world and use their own numbers, never the game's random generators, so the game plays the same with or without them.
+
+---
+
 ## 8. Autosave
 
 **Option:** AUTOSAVE (`autosave`, **on by default**)
@@ -359,6 +461,26 @@ A write error is logged to stderr and does not stop the game.
 
 ---
 
+## 8b. Language
+
+**Option:** LANGUAGE (`language`, AUTO by default)
+**Files:** `src/core/language.*`, `src/core/translation.*`, `src/core/data_files.*`, `languages/<id>/port.txt`, `scripts/update_languages.py`; the process: [docs/TRANSLATING.md](docs/TRANSLATING.md)
+
+The port prints some texts itself: its own screens (Enhancements, controller), and the texts the original keeps in its executable (item names, Weasel's shop, a few messages, the version lines). The code writes them in English (`tr("BACK")`). The `languages` folder next to the executable (else in the current folder) holds one folder per language: `port.txt` translates those texts, and any other file replaces the data folder's file with the same path (pictures, fonts, scripts, subtitles...). The repository ships `en/port.txt` (generated, the reference) and `fr/port.txt` (the French `CRUSADER.EXE` 1.08's texts, and the port's own).
+
+- **AUTO**: the texts of the data's language, `fr`, `en` or `de` (as the original, which has the texts of its language only), and no replacement data files.
+- **The folders**, by id: the row shows each `port.txt`'s `@name` (ENGLISH, FRANCAIS...). A text `port.txt` does not translate stays in English.
+- The texts change at once; `port.txt` is read again after each pick, so a translator sees the changes. The data files are read at start-up: when the language picked has other data files than the ones read, the GAME page says "RESTART TO LOAD ITS GAME FILES". `CRUSADER.CFG` keeps the id in lower case (`language=pt-br`); an unknown id gives AUTO. Without the folder, the texts are in English.
+- A data file is looked up in the language folder, then in the mod folder (level editor), then in the data folder. The data's version is still detected from the data folder: a language's files must be translations of that version's. A translated script (`EUSECODE.FLX`) may not load games saved with another language's.
+
+**`port.txt` format** (UTF-8; `src/core/translation.hpp`, docs/TRANSLATING.md)
+- `#` comments, blank lines, `@name = <name>`, then `<English text> = <translation>` lines. `\n` is a line break, `\\` a backslash; an empty translation keeps the English text.
+- The translations are converted to code page 850, the fonts' code page. The fonts must have the letters used (the menus of the port use capitals without accents; a language folder can bring its own `STATIC/FONTS.FLX`).
+- A translation must keep the `%` conversions of its English text, in the same order, or it is ignored (with a message on the error output).
+- `scripts/update_languages.py` writes `en/port.txt` from the sources and brings the other `port.txt` files in line; a test (`language_files`) fails when one is out of date or `fr/port.txt` misses a text.
+
+---
+
 ## 9. Toggle run
 
 **Option:** TOGGLE RUN (`togglerun`, off by default)
@@ -370,6 +492,23 @@ A write error is logged to stderr and does not stop the game.
 - The Shift press itself is not passed to the game.
 - The movement controller sees Shift held **exactly while running is on**, whatever the physical state of the key.
 - Turning the option off resets running to "off".
+
+---
+
+## 9b. Original game bug fixes
+
+**Option:** ORIGINAL BUG FIXES / CORRECTIFS ORIGINAL (`fixoriginalbugs`, off by default)
+
+Some bugs are in the original game itself, in its scripts (usecode) or its level data, and the port plays them as they are. This option corrects those that can block a mission. Off, the game behaves exactly as the original. The crashes and misbehaviours of the original executable are a different matter: the port always avoids them (section 17).
+
+**Keycards lost with an NPC that leaves no body**
+**Files:** `src/engine/usecode/item_intrinsics.cpp` (`Container::I_destroyContents`)
+- **Original**: many keycards are not placed in a level but handed out when an NPC dies. A keycard egg (shape `0x4E7`) belongs to a group of NPCs. The death script (`NPCDEATH`) creates the card in the inventory of the **first NPC of the group to die**, then moves that inventory into the body. Some NPCs leave no body: the courier robot (`0x45D`) and the shapes `0x385` and `0x4E6`. For them, the script destroys the inventory, card included.
+- **Example**: mission 10. Behind the teleporter to the chemist's room, the courier, the chemist and two guards share the group of the green keycard 9, which opens the lift further on. If the courier dies first, the card is gone. Checked in the original under DOSBox. The mission can still be finished with a second green card, hidden on a shelf of a nearby lab.
+- **With the option**: when the inventory of an NPC is destroyed this way, its keycards (`0x111`) are put down on the floor where it stood instead.
+- Origin fixed it the same way in *No Regret*: its `NPCDEATH` puts the card on the floor where the NPC stood when the NPC is a robot that leaves no body (`NPC` function 42: shapes `0x2CB`, `0x45D`, `0x338`, `0x385`, `0x4E6`, `0x383`, `0x30C`, `0x319`, `0x5E2`), before emptying it. The No Regret port therefore needs no option for it.
+- Groups with such an NPC were also found on maps 13, 17 and 29.
+- Test: `game_tests --courier-keycard`.
 
 ---
 
@@ -385,6 +524,25 @@ The original keypad (door and chest codes) only works with the mouse or the numb
 - With the selection active, Enter **presses the selected button**, with sound `0x3A` for clear and `0x3B` for the others.
 - Typing a digit, clearing or clicking turns the selection off.
 - Everything else is as in the original: 8 digits at most, cheat code `74697689`, comparison with the code modulo 10000, sounds `0x32`/`0x31`.
+
+---
+
+## 10b. Loot from remains (cheat)
+
+**Option:** LOOT FROM REMAINS / BUTIN DES CENDRES, on the CHEATS / TRICHE page (`remainsloot`, off by default). Asked for in [No Regret's issue #2](https://github.com/sebsebseb1982/crusader-no-regret-decomp/issues/2), for both games.
+**Files:** `src/engine/world/death_loot.*`, `src/engine/world/projectile.cpp`, `src/engine/usecode/item_intrinsics.cpp`
+
+**Original**: an enemy burnt, melted or electrocuted by an energy weapon, or set on fire by a blast, leaves no body to search. The death usecode (NPCDEATH) destroys what the enemy carried and makes its remains (ashes, a skeleton…) without the loot a body gets. Killing enemies with plasma therefore costs ammunition and gives nothing back.
+
+**With the option**, the loot a body would have held drops on the floor beside the remains: the weapons the enemy carried (NPCDEATH's function `0x21` moves them into a body), and what NPCDEATH's function `0x22` adds, drawn for the shape the enemy had alive.
+
+**Deaths concerned** (the shapes NPCDEATH leaves without a body): burnt `0x58F`, electrocuted `0x59C`, burning `0x576`, melted `0x596`. The player's own death drops nothing.
+
+**Rules**
+- The loot drops when the original would destroy it, as NPCDEATH starts: at the death animation's event (the end of the fall, or of the run for a burning enemy), or when the remains enter the fast area. A death whose animations call no event (the electrocuted `0x59C`) drops it at once.
+- Each item takes a free spot around the remains, 32 units away in the 8 directions, then 64; when none is free, the remains' own spot. It then falls if nothing holds it.
+- The loot is drawn with the game's random numbers, as for a body: switching the option on changes the following random draws.
+- A game saved during a death animation loses that enemy's loot.
 
 ---
 
@@ -406,9 +564,16 @@ Two small lines are centred at the bottom of the main menu, in the dimmed colour
 1. `PORT V<version>` (French: `PORTAGE V<version>`). A leading `v` in the build version is dropped. The line is hidden if the version is empty.
 2. `GAME DATA V<x.yy> <FR|US>` (French: `DONNEES DU JEU …`). The version is read from `CRUSADER.EXE` (the string "CRUSADER: No Remorse Vx.yy"). If it is not found, the line shows UNKNOWN or UNKNOWN LANGUAGE.
 
+### 12b. Christmas hat
+
+The original No Remorse has no Christmas mode; No Regret plays Christmas music from 24 to 31 December. The port borrows those dates:
+- From **24 to 31 December** (the computer's local date at launch), the Silencer of the main menu wears a red Christmas hat with white fur. It is drawn over the menu's background, in its palette and with its scanlines.
+- **Ctrl+M** (next music track) turns the Christmas mode off until the game is quit: the hat is gone the next time the menu opens.
+- There is no option: outside these dates the menu is the original's.
+
 ---
 
-## 13. Two game versions: French 1.08 and US 1.23
+## 13. Game versions: French 1.08, US 1.23 and German 1.07
 
 **Files:** `src/core/language.*`, `src/core/data_info.*`, `src/engine/usecode/intrinsic_numbering.cpp`, UI screens
 
@@ -416,7 +581,7 @@ An original executable handles one language. The port accepts the **French 1.08*
 
 **Rules**
 - The language is detected when the data loads. French is the default.
-- The texts stored in `CRUSADER.EXE` (item names, messages, Weasel's shop) are kept in both languages in the port and chosen by language. The US data also names grenades 2 to 4 (CONCUSSION, NERVE GAS, EMP), left "INVALID" in French. The port's own screens follow the same language (`tr(fr, en)`).
+- The texts stored in `CRUSADER.EXE` (item names, messages, Weasel's shop) are written in English in the port, the French ones in `languages/fr/port.txt`, chosen by language. The US data also names grenades 2 to 4 (CONCUSSION, NERVE GAS, EMP), left "INVALID" in French (the port shows the English names). The port's own screens follow the same language (`tr()`, section 8b).
 - The US scripts call the native routines (intrinsics) under **their own numbering**. The port translates it.
 - Some US screens place their buttons for the English images: the port uses the US positions with US data (F4/F5/Alt+X questions, help, main menu, options, difficulty).
 - Save names: the US version refuses `<`, `:` and `;`.
@@ -424,6 +589,14 @@ An original executable handles one language. The port accepts the **French 1.08*
 - **No `CRUSADER.CFG`** (US data copied without the installer): the installer's defaults apply, i.e. **dubbed videos** (`bigvideo`) and **subtitles** on.
 - Music files (`M01.AMF`…) are looked up **case-insensitively**, for Linux file systems.
 - Saves from one version do not load with the other (different usecode).
+
+**German 1.07** (`data_info.hpp`)
+- Its `CRUSADER.EXE` is the French 1.08 one translated: same code and tables, same intrinsic table (`UNKCOFF.DAT`, `UNKDS.DAT`, `OVERLOAD.DAT` byte for byte), so the port runs it with the French numbering. It is told by its banner (`V1.07`) and its start-up message.
+- Its texts are in `languages/de/port.txt` (item names, Weasel's shop, messages, `<MEHR>`), the port's own screens translated too (AE, OE, UE for the umlauts the menu fonts lack).
+- Its executable moves some buttons for the German pictures; the port does the same: main menu ("options", "credits", "quit"), options screen (the "off" buttons, the video line, "quit", the labels of the volumes, the focus frames), help screen, F4/F5 questions (the Alt+X one stays French), difficulty screen (one centred picture, as in the US version).
+- Save names: the German executable maps a US keyboard to a German one (Y and Z swapped, the umlaut keys give Ä, Ö, Ü) and takes neither `<`, `:`, `;` nor quotes; the port takes the umlauts from the player's keyboard layout. The dates proposed by `--auto-save-names` are `18.11.2026 14:32`.
+- Nothing is cut from the game itself: the usecode is the French one with German texts (and two signs' frames), and the shapes, the damage table and the animations are the French ones. Only pictures, voices, movies and subtitles differ.
+- Not reproduced: the joystick's repeat delay of the German executable (20 ticks instead of 30); the port has its own controller support.
 
 ---
 
@@ -434,14 +607,14 @@ An original executable handles one language. The port accepts the **French 1.08*
 The original reads much of its data from the CD and needs it in the drive. The port reads everything from `data/` and never needs a CD.
 
 **Rules**
-- A `.iso` file can be passed on the command line, or dropped into `data/`. The first `*.iso` found is used.
+- A `.iso` file (or `.gog`, or a `.bin` image with its `.cue` sheet) can be passed on the command line, or dropped into `data/`. The first image found is used; a `.cue` sheet opens the file of its `FILE` line.
 - If `data/` does not exist, it is created with a `PUT_GAME_DATA_HERE.txt` note.
 - If `data/STATIC/` already exists, the ISO is ignored: the data is considered installed.
 - Otherwise the ISO (ISO 9660, 2048-byte sectors or raw 2352-byte images) is extracted into `data/`, about 550 MB, with progress printed to stderr.
   - The `CATALOG/` folder (a demo browser unrelated to the game) is skipped.
   - The `;1` version suffix of file names is dropped.
 - The ISO can be deleted afterwards.
-- If no data is found, a message says to copy an installation (French 1.08 or US 1.23) or the ISO.
+- If no data is found, a message says to copy an installation (French 1.08, US 1.23, English 1.01 or German 1.07) or the CD image.
 - The US-only CD features are not needed and their CFG keys are ignored: CD transfer icon (`cdicon`), game path (`crupath`), music file per track (`tune1`–`tune16`).
 
 ---
@@ -483,8 +656,14 @@ The original reads much of its data from the CD and needs it in the drive. The p
 | `directionalaim` | false | `true` |
 | `drawonaim` | true | `false` |
 | `togglerun` | false | `true` |
+| `impactmarks` | false | `true` |
+| `bloodmarks` | false | `true` |
+| `goremode` | false | `true` |
+| `casings` | false | `true` |
+| `remainsloot` | false | `true` |
 | `nativeresolution` | true | `false` |
 | `autosave` | true | `false` |
+| `language` | empty (AUTO) | a language folder is picked: its id (`fr`, `en`, `pt-br`...) |
 | `viewzoom` | 0 (auto), 1..4 with decimals (`1.5`) | ≠ 0 |
 | `padmap` | see section 2.4 | controller config ≠ default. 24 comma-separated action numbers; `-1` = default role; values clamped |
 | `padaim` | 3, clamped to 1..5 | same |

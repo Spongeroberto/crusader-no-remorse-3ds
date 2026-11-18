@@ -22,10 +22,13 @@
 // (keyboard or left mouse button; "quit" leaves).
 
 #include "core/iso_image.hpp"
+#include "core/language.hpp"
 #include "core/png_writer.hpp"
 #include "crusader_version.hpp"
+#include "engine/ui/christmas_hat.hpp"
 #include "engine/world/inventory.hpp"
 #include "game/game.hpp"
+#include "platform/real_shift.hpp"
 #include "platform/sdl_audio.hpp"
 #include "platform/sdl_gamepad.hpp"
 #include "platform/sdl_input.hpp"
@@ -36,6 +39,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <exception>
 #include <fstream>
 #include <memory>
@@ -166,9 +170,30 @@ int main(int argc, char** argv) {
             throw std::runtime_error("no game data in '" + data.string() +
                                      "': copy the files of an install of the game (French 1.08, US 1.23 or English 1.01) there, or its .iso image (GAME.GOG in the GOG release)");
         }
+        // The language files (port addition): the "languages" folder next to
+        // the executable, else in the current folder.
+        {
+            std::filesystem::path languages = "languages";
+            if (char* base = SDL_GetBasePath()) {
+                const std::filesystem::path beside = std::filesystem::path(base) / "languages";
+                SDL_free(base);
+                if (std::error_code error; std::filesystem::is_directory(beside, error)) languages = beside;
+            }
+            set_languages_dir(languages);
+        }
         Game game(data, {}, mod);
         game.set_port_version(CRUSADER_VERSION);
         game.set_auto_save_names(auto_save_names);
+        {
+            const std::time_t now = std::time(nullptr);
+            std::tm date{};
+#ifdef _WIN32
+            const bool known = localtime_s(&date, &now) == 0;
+#else
+            const bool known = localtime_r(&now, &date) != nullptr;
+#endif
+            game.set_christmas(known && is_christmas(date));
+        }
         if (start_map > 0) game.set_start(start_map, static_cast<std::uint16_t>(start_egg));
         if (laurie) game.enable_cheats();
         // No game asked for: the start-up, as when the original is launched
@@ -243,6 +268,7 @@ int main(int argc, char** argv) {
         game.set_config_file(data / "CRUSADER.CFG");
         SdlPresenter presenter(kWindowTitle, Game::kScreenWidth, Game::kScreenHeight, 2, fullscreen);
         presenter.set_gamma(gamma);
+        install_real_shift();  // Windows: Shift + keypad with Num Lock on (issue #14)
         if (!classic && !fullscreen) presenter.maximize();
         // Native resolution: the game is drawn at the largest whole fraction of
         // the window that is still 640 x 480 or more, so the pixels keep their
@@ -302,7 +328,7 @@ int main(int argc, char** argv) {
                     continue;
                 }
                 if (auto k = translate_key(ev)) {
-                    if (pad_debug) std::printf("[key] sdl keyboard %02x%s %s\n", k->scancode, k->extended ? " ext" : "", k->pressed ? "down" : "up");
+                    if (pad_debug) std::printf("[key] sdl keyboard %02x%s %s%s\n", k->scancode, k->extended ? " ext" : "", k->pressed ? "down" : "up", k->shift() ? " shift" : "");
                     game.key(k->scancode, k->extended, k->pressed, k->flags, k->ascii);
                 }
                 if (auto m = translate_mouse(ev)) {

@@ -9,6 +9,7 @@
 // time, then render(), once per presented frame.
 
 #include "core/anim_dat.hpp"
+#include "core/data_files.hpp"
 #include "core/game_config.hpp"
 #include "core/dtable.hpp"
 #include "core/font.hpp"
@@ -36,6 +37,8 @@
 #include "engine/world/avatar_mover.hpp"
 #include "engine/world/combat_control.hpp"
 #include "core/weapon_overlay.hpp"
+#include "engine/world/casings.hpp"
+#include "engine/world/damage_marks.hpp"
 #include "engine/world/render.hpp"
 #include "engine/world/world.hpp"
 #include "engine/world/world_mouse.hpp"
@@ -284,6 +287,10 @@ public:
     // by the PortMaster launcher): the save screens propose the date and time
     // as the name (LoadScreen::set_auto_name), confirmed with the pad's A.
     void set_auto_save_names(bool on) { auto_save_names_ = on; }
+    // Port addition: the date is 24 to 31 December (is_christmas), set by the
+    // program from the clock: the main menu's Silencer wears a Christmas hat
+    // until Ctrl+M turns the Christmas mode off (christmas_hat.hpp).
+    void set_christmas(bool on) { christmas_ = on; }
     // CRUSYS_1050_093D: the "-laurie" argument enables the cheats (DS:08F0),
     // without turning them on (cheats.hpp).
     void enable_cheats() { world_->state.cheats.enabled = true; }
@@ -343,8 +350,10 @@ private:
     // The game process's pass (1038:01B1) and the animation of the scenery
     // it asks for (DS:2C52), unless a modal screen pauses the game.
     void animate_scenery();
-    // The game view and the status bar, without the cursor.
-    void render_view(Surface8& screen, RenderStats* stats = nullptr);
+    // The game view and the status bar, without the cursor. With `keep_view`
+    // (a movie's background), under a modal screen or during a movie, the
+    // view keeps its size: a screen of another size gets its centre.
+    void render_view(Surface8& screen, RenderStats* stats = nullptr, bool keep_view = false);
     template <typename Draw>
     void draw_window(Surface8& screen, int x0, int y0, Draw&& draw);
     Surface8 window_;  // 640 x 480 scratch for draw_window
@@ -355,6 +364,9 @@ private:
     void draw_autosave_icon(Surface8& screen);
 
 
+    // Where the data files are read: the language folder picked, the mod
+    // folder, the data folder (data_files.hpp). Before the data it opens.
+    DataFiles files_;
     // Data, kept open for the whole run.
     FlexArchive shapes_flex_;               // empty with streamed shapes
     std::optional<FlexFile> shapes_file_;   // with streamed shapes
@@ -367,6 +379,8 @@ private:
     bool aim_stick_ = false;
     double aim_stick_deg_ = 0;
     WeaponOverlay weapon_overlay_;
+    DamageMarks damage_marks_;  // port addition (GameConfig::impact_marks)
+    Casings casings_;           // port addition (GameConfig::casings)
     Palette palette_;
     UsecodeFile usecode_;
     ShapeCache shapes_;
@@ -422,6 +436,7 @@ private:
     // back after it (13E0:0CD8).
     bool weasel_movie_ = false;
     bool auto_save_names_ = false;     // set_auto_save_names
+    bool christmas_ = false;           // set_christmas
     bool weasel_intro_played_ = false;  // DS:5ECF
     // The game process's pass count (type 0x245, +0x40 / +0x44) and its value
     // at the last animation pass of the scenery (DS:2D3B), item_anim.hpp.
@@ -439,6 +454,11 @@ private:
     HelpScreen::Pictures help_pictures_;
     bool autosave_pending_ = false;    // request_autosave, until the player may act
     std::uint32_t autosave_due_ = 0;   // the kernel tick from which it can run
+    // A line of scripts that must end first (the keypad's, Process::lineage),
+    // waited for until autosave_give_up_ at most.
+    std::uint16_t autosave_lineage_ = 0;
+    std::uint16_t last_lineage_ = 0;
+    std::uint32_t autosave_give_up_ = 0;
     bool run_toggled_ = false;         // GameConfig::toggle_run: running is switched on
     std::uint32_t autosave_icon_us_ = 0;  // what is left of the floppy disk's display
     std::vector<std::uint8_t> floppy_;    // its palette indices (0xFF: transparent), built when first drawn

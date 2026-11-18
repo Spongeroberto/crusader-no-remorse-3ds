@@ -1,14 +1,19 @@
 // Gumps and other UI pieces on synthetic shapes (no game data).
 
 #include "core/flex.hpp"
+#include "core/language.hpp"
+#include "core/palette.hpp"
 #include "core/shape.hpp"
 #include "core/surface.hpp"
+#include "engine/ui/christmas_hat.hpp"
 #include "engine/ui/enhancements_screen.hpp"
 #include "engine/ui/keypad_gump.hpp"
 #include "engine/ui/gump_keys.hpp"
 #include "engine/world/render.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <ctime>
 #include <cstdio>
 #include <filesystem>
 #include <vector>
@@ -109,37 +114,167 @@ void test_keypad_digit_spacing() {
     CHECK(second - first == 4 + 1);
 }
 
+// Port addition: the enhancements window, its first page and its pages.
+using Entry = EnhancementsScreen::Entry;
+using Page = EnhancementsScreen::Page;
+
+// Down to `entry` on the page shown, then Enter.
+void choose(EnhancementsScreen& screen, Entry entry) {
+    const int row = screen.row_of(entry);
+    CHECK(row >= 0);
+    while (screen.focus() > row) screen.key(gump_key::kUp);
+    while (screen.focus() < row) screen.key(gump_key::kDown);
+    screen.key(gump_key::kEnter);
+}
+
 void test_vibration_settings() {
     FontSet fonts;
     GameConfig config;
     int pad_focus = 0;
     int previews = 0;
     EnhancementsScreen screen(fonts, config, pad_focus, [&] { ++previews; });
-
-    for (int i = 0; i < EnhancementsScreen::kVibrationIntensityRow; ++i) screen.key(gump_key::kDown);
+    choose(screen, Entry::Controls);
+    CHECK(screen.page() == Page::Controls);
+    for (int i = 0; i < screen.row_of(Entry::VibrationIntensity); ++i) screen.key(gump_key::kDown);
     screen.key(gump_key::kLeft);
     CHECK(config.vibration_intensity == 90 && previews == 1);
     screen.key(gump_key::kEnter);
     CHECK(config.vibration_intensity == 100 && previews == 2);
     screen.key(gump_key::kRight);
     CHECK(config.vibration_intensity == 100 && previews == 2);
-
-    EnhancementsScreen toggle(fonts, config, pad_focus);
-    for (int i = 0; i < EnhancementsScreen::kVibrationRow; ++i) toggle.key(gump_key::kDown);
-    toggle.key(gump_key::kEnter);
+    choose(screen, Entry::Vibration);
     CHECK(!config.vibration);
 
     EnhancementsScreen smooth(fonts, config, pad_focus);
-    for (int i = 0; i < EnhancementsScreen::kSmoothRow; ++i) smooth.key(gump_key::kDown);
-    smooth.key(gump_key::kEnter);
+    choose(smooth, Entry::Display);
+    choose(smooth, Entry::Smooth);
     CHECK(config.smooth_scaling);
+}
+
+void test_enhancements_pages() {
+    FontSet fonts;
+    GameConfig config;
+    int pad_focus = 0;
+    EnhancementsScreen screen(fonts, config, pad_focus);
+    // The first page: a row per page, "retour" last.
+    CHECK(screen.page() == Page::Main && screen.entries().size() == 6 && screen.entries().back() == Entry::Back);
+    // Every page ends with "retour" and fits the window.
+    for (Entry page : {Entry::Controls, Entry::Display, Entry::Effects, Entry::Game, Entry::Cheats}) {
+        EnhancementsScreen s(fonts, config, pad_focus);
+        choose(s, page);
+        CHECK(s.page() != Page::Main && s.focus() == 0 && s.entries().back() == Entry::Back);
+        CHECK(s.entries().size() <= 9 && s.row_rect(static_cast<int>(s.entries().size()) - 1).y1 < 460);
+    }
+    // Effects: both toggles on their own.
+    choose(screen, Entry::Effects);
+    choose(screen, Entry::Blood);
+    CHECK(config.blood_marks && !config.impact_marks);
+    choose(screen, Entry::Impact);
+    CHECK(config.impact_marks && config.blood_marks);
+    // Blood: on, gore, off.
+    choose(screen, Entry::Blood);
+    CHECK(config.blood_marks && config.gore_mode);
+    choose(screen, Entry::Blood);
+    CHECK(!config.blood_marks && !config.gore_mode);
+    choose(screen, Entry::Blood);
+    CHECK(config.blood_marks && !config.gore_mode);
+    // Casings: off by default, on their own.
+    CHECK(!config.casings);
+    choose(screen, Entry::Casings);
+    CHECK(config.casings && config.blood_marks && config.impact_marks);
+    choose(screen, Entry::Casings);
+    CHECK(!config.casings);
+    // Escape goes back to the first page on the page's row, then closes.
+    screen.key(gump_key::kEscape);
+    CHECK(screen.page() == Page::Main && screen.focus() == screen.row_of(Entry::Effects) && !screen.closed());
+    // "retour" on a page does the same.
+    choose(screen, Entry::Game);
+    choose(screen, Entry::Back);
+    CHECK(screen.page() == Page::Main && screen.focus() == screen.row_of(Entry::Game));
+    // Cheats: "butin des restes", off by default.
+    CHECK(!config.remains_loot);
+    choose(screen, Entry::Cheats);
+    choose(screen, Entry::RemainsLoot);
+    CHECK(config.remains_loot);
+    choose(screen, Entry::RemainsLoot);
+    CHECK(!config.remains_loot);
+    screen.key(gump_key::kEscape);
+    CHECK(screen.page() == Page::Main && screen.focus() == screen.row_of(Entry::Cheats));
+    // Language (the repository's files, French data): auto, German, English,
+    // French, auto.
+    choose(screen, Entry::Game);
+    CHECK(std::string(tr("BACK")) == "RETOUR");
+    choose(screen, Entry::Language);
+    CHECK(config.language == "de" && selected_language().name == "DEUTSCH" && std::string(tr("BACK")) == "ZURUECK");
+    choose(screen, Entry::Language);
+    CHECK(config.language == "en" && selected_language().id == "en" && std::string(tr("BACK")) == "BACK");
+    choose(screen, Entry::Language);
+    CHECK(config.language == "fr" && selected_language().name == "FRANCAIS" && std::string(tr("BACK")) == "RETOUR");
+    choose(screen, Entry::Language);
+    CHECK(config.language.empty() && selected_language().id.empty() && std::string(tr("BACK")) == "RETOUR");
+    screen.key(gump_key::kEscape);
+    screen.key(gump_key::kEscape);
+    CHECK(screen.closed());
+    // The mouse: a row pressed opens it.
+    EnhancementsScreen mouse(fonts, config, pad_focus);
+    const auto r = mouse.row_rect(mouse.row_of(Entry::Display));
+    mouse.mouse_down(r.x0 + 5, r.y0 + 5);
+    CHECK(mouse.page() == Page::Display);
+    const auto follow = mouse.row_rect(mouse.row_of(Entry::Follow));
+    mouse.mouse_down(follow.x0 + 5, follow.y0 + 5);
+    CHECK(config.follow_player);
+}
+
+// The Christmas hat of the main menu: 24 to 31 December only, drawn over the
+// Silencer's head (the background's top row is at y = 120 in No Remorse, 75
+// in No Regret) and nowhere else.
+void test_christmas_hat() {
+    std::tm date{};
+    date.tm_mon = 11;
+    date.tm_mday = 23;
+    CHECK(!is_christmas(date));
+    date.tm_mday = 24;
+    CHECK(is_christmas(date));
+    date.tm_mday = 31;
+    CHECK(is_christmas(date));
+    date.tm_mon = 0;
+    date.tm_mday = 1;
+    CHECK(!is_christmas(date));
+    date.tm_mon = 10;
+    date.tm_mday = 25;
+    CHECK(!is_christmas(date));
+
+    for (const bool regret : {false, true}) {
+        Surface8 screen(640, 480, 7);
+        draw_christmas_hat(screen, regret);
+        int drawn = 0, x0 = 640, y0 = 480, x1 = -1, y1 = -1;
+        for (int y = 0; y < screen.height; ++y) {
+            for (int x = 0; x < screen.width; ++x) {
+                const std::uint8_t c = screen.row(y)[x];
+                if (c == 7) continue;
+                CHECK(c != kTransparentIndex);
+                ++drawn;
+                x0 = std::min(x0, x), y0 = std::min(y0, y), x1 = std::max(x1, x), y1 = std::max(y1, y);
+            }
+        }
+        CHECK(drawn > 1500);
+        CHECK(x0 >= 240 && x1 < 360);
+        CHECK(y0 >= (regret ? 75 : 120) && y1 < (regret ? 160 : 200));
+    }
+    // A small screen: clipped, no write outside.
+    Surface8 small(300, 150, 7);
+    draw_christmas_hat(small, false);
+    CHECK(small.pixels.size() == 300u * 150u);
 }
 
 }  // namespace
 
 int main() {
+    set_languages_dir(CRUSADER_LANGUAGES_DIR);  // the French texts (languages/fr/port.txt)
     test_keypad_digit_spacing();
     test_vibration_settings();
+    test_enhancements_pages();
+    test_christmas_hat();
     if (failures == 0) std::printf("all ui checks passed\n");
     return failures == 0 ? 0 : 1;
 }

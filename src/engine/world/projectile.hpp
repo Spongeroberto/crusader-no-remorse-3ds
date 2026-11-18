@@ -27,8 +27,10 @@
 // (+1 when that distance / 16 is not a multiple of 16 or is 0). Each step is
 // swept from the previous position with shape 0x1D9; a clear sweep moves the
 // projectile on. Blocked, at z 0 or 250, or beyond its range (range + 25
-// steps), it hits: the item hit, if any, takes the damage (passing through
-// its own shooter during the first 5 steps), then the projectile goes.
+// steps), it hits (SPRITE_1140_1098): that last step is swept again in parts
+// of 16, and the blocker of the first blocked part, if any, takes the damage
+// (passing through its own shooter during the first 5 steps) where that part
+// started; then the projectile goes.
 //
 // Damage (1130:026B, reproduced part): the difficulty (DS:7E19) multiplies
 // the damage taken by other NPCs by 5 (level 1) or 3 (level 2) and divides
@@ -50,8 +52,8 @@
 //
 // Not reproduced: the aiming mode of DS:2863 (SPRITE_1140_0e88), the target
 // shift of fire types 2 and 13 (written after the steps are set, unused by
-// the straight flight), trails, the exact refinement of the impact point in steps of 16
-// (the sweep's stopping point is used), pushing items (types 3, 4), special
+// the straight flight), trails, the shift of the impact point into a large
+// item's footprint (SPRITE_1140_145E), pushing items (types 3, 4), special
 // deaths (explosion, burning, electrocution: types 3, 4, 6, 10, 12, 14,
 // 15) beyond the shape change. The
 // projectile is drawn as a world item of shape 0x1D9 instead of a sprite.
@@ -98,6 +100,20 @@ Pid fire_weapon(Kernel& kernel, World& world, const AnimDat& anims, ObjId shoote
 void apply_damage(Kernel& kernel, World& world, const AnimDat& anims, ObjId target, ObjId attacker, int dir,
                   int damage, int fire_type, const World::Point* at = nullptr);
 
+// Shapes that take full damage from bullets: the living, not the robots.
+bool takes_full_bullet_damage(std::uint16_t shape);
+
+// Port addition (blood marks): an NPC's hit points before a hit
+// (watch_wound), then the wound it took reported to WorldHooks::npc_wounded
+// (report_wound). Nothing is watched without the hook.
+struct WoundWatch {
+    ObjId npc = 0;
+    int hp = 0;
+    bool bleeds = false;
+};
+WoundWatch watch_wound(const World& world, ObjId target);
+void report_wound(const World& world, const WoundWatch& before, int fire_type, const World::Point& from);
+
 class ProjectileProcess : public Process {
 public:
     static constexpr std::uint16_t kType = 0x250;
@@ -117,6 +133,7 @@ protected:
     void on_terminate() override;
 
 private:
+    void impact(const World::Point& next, bool ignore_shooter);
     void impact(ObjId hit);
     World::Point homing_step();
     bool ricochet(ObjId blocker, const World::Point& at);

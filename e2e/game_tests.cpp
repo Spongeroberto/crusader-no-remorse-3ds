@@ -2,6 +2,7 @@
 // can cross the whole map without usecode errors while the fast area follows.
 
 #include "core/avi_movie.hpp"
+#include "core/language.hpp"
 #include "core/dtable.hpp"
 #include "core/movie_subtitles.hpp"
 #include "engine/palette_fader.hpp"
@@ -33,6 +34,7 @@
 #include "test_saves.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -40,6 +42,8 @@
 #include <iterator>
 #include <map>
 #include <set>
+#include <span>
+#include <string_view>
 #include <tuple>
 
 using namespace crusader;
@@ -831,9 +835,12 @@ void test_options(const std::filesystem::path& data) {
     CHECK(o->focus() == O::kQuitLine && o->pressed(O::kQuit));
     press(game, 0x4B, true);
     press(game, 0x1C, false, 0x0D);
-    // The enhancements window holds the controller screen, on its first row.
+    // The enhancements window holds the controller screen, first row of its
+    // first page ("controles").
     CHECK(o->enhancements() && !o->gamepad());
     game.render(screen);
+    press(game, 0x1C, false, 0x0D);
+    CHECK(o->enhancements()->page() == EnhancementsScreen::Page::Controls);
     press(game, 0x1C, false, 0x0D);
     const GamepadScreen* pad = o->gamepad();
     using G = GamepadScreen;
@@ -911,6 +918,9 @@ void test_options(const std::filesystem::path& data) {
         press(game, 0x01, false, 0x1B);  // Escape closes the controller screen only
         CHECK(game.menu()->options() && !game.menu()->options()->gamepad() && game.menu()->options()->enhancements());
     }
+    press(game, 0x01, false, 0x1B);  // then back to the first page
+    CHECK(game.menu()->options() && game.menu()->options()->enhancements() &&
+          game.menu()->options()->enhancements()->page() == EnhancementsScreen::Page::Main);
     press(game, 0x01, false, 0x1B);  // then the enhancements window
     CHECK(game.menu()->options() && !game.menu()->options()->enhancements());
     press(game, 0x01, false, 0x1B);
@@ -990,11 +1000,21 @@ void test_fades(const std::filesystem::path& data) {
     CHECK(s.cycle_paused && game.kernel().get(wait) && !game.kernel().get(wait)->terminated());
     for (int i = 0; i < 70; ++i) game.update(kFrameUs);
     CHECK(!s.cycle_paused && s.screen_palette == s.game_palette);
+
+    // The menu opened during a fade that resumes the cycling when it fails:
+    // the cycling stays paused, so the menu palette does not flicker.
+    game.kernel().add(std::make_unique<PaletteFaderProcess>(s.screen_palette, Palette::filled(0, 0, 0), 60, 50, 1,
+                                                            &s.cycle_paused, true));
+    for (int i = 0; i < 4; ++i) game.update(kFrameUs);
+    game.open_menu();
+    const Palette menu = s.screen_palette;
+    for (int i = 0; i < 31; ++i) game.update(kFrameUs);
+    CHECK(game.menu() && s.cycle_paused && s.screen_palette == menu);
 }
 
 // Milestone 3: the credits from the menu.
 void test_credits(const std::filesystem::path& data) {
-    const auto cd = CreditsData::load(data / "STATIC");
+    const auto cd = CreditsData::load(DataFiles(data));
     CHECK(cd.background.width == 640 && cd.background.height == 480 && cd.script.size() == 3601);
 
     Game game(data, test_saves(data));
@@ -1136,6 +1156,86 @@ void test_combat_zone(const std::filesystem::path& data) {
     CHECK(w.is_partly_in_combat_zone(*w.get(6)));
 }
 
+// Port addition, the cheat "loot from remains" (death_loot.hpp, No Regret's
+// GitHub issue #2): two humans of save 13 (NPCs 16 and 18) brought beside
+// the player and burnt by plasma (fire type 6, shape 0x58F). NPCDEATH makes
+// them no body and destroys what they carry. With the cheat, at the end of each death their weapons and what
+// NPCDEATH's function 0x22 draws for the shape they had alive (into a box
+// that is no body) drop on the floor beside them. What 0x22 draws is random:
+// the test adds a clip to each box.
+void test_remains_loot(const std::filesystem::path& data) {
+    for (const bool cheat : {false, true}) {
+        Game game(data, test_saves(data));
+        game.config().remains_loot = cheat;
+        game.load_save(13);
+        game.update(kFrameUs);
+        World& w = game.world();
+        CHECK(w.remains_loot() == cheat);
+
+        std::vector<std::uint16_t> called_with;  // the NPC's shape during each call
+        std::vector<ObjId> dropped;              // the weapons carried, then what the boxes held
+        std::vector<World::Point> remains;       // where the NPCs lay when their loot dropped
+        WorldHooks hooks = w.hooks();
+        hooks.call_class_event = [&w, call = hooks.call_class_event, &called_with, &dropped, &remains](
+                                     std::string_view name, std::uint16_t event, ObjId npc,
+                                     std::span<const std::uint8_t> args) {
+            CHECK(name == "NPCDEATH" && event == 0x22 && args.size() == 2);
+            const bool ok = call(name, event, npc, args);
+            const Item* dead = w.get(npc);
+            called_with.push_back(dead->shape);
+            remains.push_back({dead->x, dead->y, dead->z});
+            const auto box = static_cast<ObjId>(args[0] | args[1] << 8);
+            if (w.create(0x55F, 0)) w.pop_to_container(box);
+            for (ObjId id : w.get(box)->contents) dropped.push_back(id);
+            return ok;
+        };
+        w.set_hooks(hooks);
+
+        const Item* player = w.get(1);
+        const std::int32_t px = player->x, py = player->y, pz = player->z;
+        w.move_item(16, px + 120, py - 120, pz);
+        w.move_item(18, px - 120, py - 120, pz);
+        game.update(kFrameUs);
+        std::vector<std::uint16_t> alive;
+        std::vector<ObjId> burnt;
+        for (const ObjId id : {16, 18}) {
+            const Item* npc = w.get(id);
+            if (!npc || w.is_dead(id) || !takes_full_bullet_damage(npc->shape)) continue;
+            const std::uint16_t shape = npc->shape;
+            std::vector<ObjId> weapons;
+            for (ObjId c : npc->contents)
+                if (w.family_of(w.get(c)->shape) == 10) weapons.push_back(c);
+            apply_damage(game.kernel(), w, game.animations(), id, 1, 0, 250, 6, nullptr);
+            npc = w.get(id);
+            if (!npc || npc->shape != 0x58F) continue;
+            alive.push_back(shape);
+            burnt.push_back(id);
+            if (cheat) dropped.insert(dropped.end(), weapons.begin(), weapons.end());
+        }
+        CHECK(burnt.size() == 2);
+        CHECK(w.death_loot().size() == (cheat ? burnt.size() : 0));
+        // The loot drops at the end of the death animations, beside the
+        // NPCs where the fall left them.
+        for (int i = 0; i < 600; ++i) game.update(kFrameUs);
+        std::printf("remains loot (cheat %s): %zu burnt, %zu items dropped\n", cheat ? "on" : "off", burnt.size(),
+                    dropped.size());
+        std::ranges::sort(alive);
+        std::ranges::sort(called_with);
+        CHECK(called_with == (cheat ? alive : std::vector<std::uint16_t>{}));
+        CHECK(dropped.size() >= (cheat ? burnt.size() : 0));
+        for (ObjId id : dropped) {
+            const Item* item = w.get(id);
+            bool near = false;
+            for (const World::Point& at : remains)
+                near = near || (item && std::abs(item->x - at.x) <= 96 && std::abs(item->y - at.y) <= 96);
+            CHECK(item && item->parent == 0 && !(item->flags & kItemEthereal) && near);
+        }
+        CHECK(w.death_loot().empty());
+        CHECK(w.pending_count() == 0);
+        CHECK(game.machine().faults().empty());
+    }
+}
+
 void test_firing(const std::filesystem::path& data) {
     // Action remapping for the shotgun (record +0xC = 0, overlay 0x33B).
     Game game(data, test_saves(data));
@@ -1205,14 +1305,15 @@ void test_firing(const std::filesystem::path& data) {
     CHECK(game.machine().faults().empty());
 }
 
-void test_rocket_vibration(const std::filesystem::path& data) {
+// The RP-22 and RP-32 are machine guns (fire type 1): a medium rumble a shot.
+void test_machine_gun_vibration(const std::filesystem::path& data) {
     struct Expected {
         std::uint16_t shape;
         std::uint16_t low_frequency;
         std::uint16_t high_frequency;
         std::uint32_t duration_ms;
     };
-    constexpr Expected profiles[] = {{0x333, 60000, 56000, 220}, {0x334, 60000, 56000, 220}};
+    constexpr Expected profiles[] = {{0x333, 44000, 34000, 110}, {0x334, 44000, 34000, 110}};
 
     Game game(data, test_saves(data));
     game.load_save(13);
@@ -2325,9 +2426,133 @@ void test_keypad(const std::filesystem::path& data) {
     }
 }
 
+// Issue #18: the reporter's autosave (English 1.01, map 7), made just after
+// keypad 5235's code. TRIGGER slides door 618 (RDOOR_N, 96 units towards -x)
+// while holding its lock, status 0x1000; the autosave caught the lock before
+// the slide, and with no process to release it once loaded, the keypad's
+// TRIGGER waited for it forever: the door stayed shut. Once loaded the lock
+// is gone and the keypad opens the door. And the autosave after a code now
+// waits until the door is still.
+void test_keypad_door_after_reload(const std::filesystem::path& data) {
+    constexpr ObjId kKeypad = 5235, kDoor = 618;
+    constexpr std::int32_t kShutX = 6959, kOpenX = 6863;
+    const auto save = test_saves(data) / "issue18-digicode-porte-fermee-SAVEGAME.12.sav";
+    {
+        Game game(data, test_saves(data));
+        game.load_save_file(save);
+        World& w = game.world();
+        CHECK(w.get(kDoor)->x == kShutX && !(w.get(kDoor)->flags & 0x1000) && (w.get(kKeypad)->flags & 0x0004));
+        int linked_locked = 0;
+        w.for_each([&](const Item& i) {
+            linked_locked += !i.parent && (i.flags & 0x1000) && (i.quality & 0xFF) == 0x0B;
+        });
+        CHECK(linked_locked == 0);
+        use_item(w, kKeypad);
+        for (int f = 0; f < 120; ++f) game.update(kFrameUs);
+        std::printf("keypad door after reload: door x %d, flags %04X\n", w.get(kDoor)->x, w.get(kDoor)->flags);
+        CHECK(w.get(kDoor)->x == kOpenX && !(w.get(kDoor)->flags & 0x1000));
+        CHECK(game.machine().faults().empty());
+    }
+    // The code typed again (the keypad's "done" bit 4 cleared): the autosave
+    // comes once the door has slid, its lock released.
+    const auto dir = std::filesystem::temp_directory_path() / "crusader_keypad_door_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    {
+        Game game(data, test_saves(data));
+        game.set_save_dir(dir);
+        GameConfig config = game.config();
+        config.autosave = true;
+        game.set_config(config);
+        game.load_save_file(save);
+        World& w = game.world();
+        w.get(kKeypad)->flags &= static_cast<std::uint16_t>(~0x0004);
+        use_item(w, kKeypad);
+        for (int f = 0; f < 3; ++f) game.update(kFrameUs);
+        const auto* keypad = dynamic_cast<const KeypadGump*>(game.screen());
+        CHECK(keypad != nullptr);
+        if (!keypad) return;
+        const std::string digits = std::to_string(keypad->code());
+        for (const char c : digits) {
+            const auto scancode = static_cast<std::uint8_t>(c == '0' ? 0x0B : 0x02 + (c - '1'));
+            game.key(scancode, false, true, 0, static_cast<std::uint8_t>(c));
+            game.key(scancode, false, false, 0, static_cast<std::uint8_t>(c));
+            game.update(kFrameUs);
+        }
+        game.key(0x1C, false, true, 0, 0x0D);
+        game.key(0x1C, false, false, 0, 0x0D);
+        game.update(kFrameUs);
+        const auto autosave = dir / ("SAVEGAME." + std::to_string(Game::kAutoSave));
+        int frames = 0;
+        for (; frames < 1200 && !std::filesystem::exists(autosave); ++frames) game.update(kFrameUs);
+        const Item* door = w.get(kDoor);
+        std::printf("keypad door autosave: code %s, saved after %d frames, door x %d, flags %04X\n", digits.c_str(),
+                    frames, door->x, door->flags);
+        // Well before the 10 s limit: the 65 markers of the link were
+        // unlocked on load too, their TRIGGER processes do not linger.
+        CHECK(std::filesystem::exists(autosave) && frames < 300);
+        CHECK(door->x == kOpenX && !(door->flags & 0x1000));
+    }
+}
+
+// Status 0x1000 saved while a process of the item's class ran (the
+// processes are not loaded): a running timer (TIMER) and a rolling roller
+// (ROLLB_NS, ROLLB_EW) get their loop started again (events 0x20 and 0x21),
+// which keeps the bit; without, nothing could ever start them. A one-shot
+// timer (QHi bit 0 clear) clears it itself once its delay is over. Ported
+// from No Regret (08d2749).
+void test_saved_busy_items(const std::filesystem::path& data) {
+    const auto dir = std::filesystem::temp_directory_path() / "crusader_saved_busy_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    for (int slot = 1; slot <= 7; ++slot) {
+        Game game(data, test_saves(data));
+        game.set_save_dir(dir);
+        game.load_save_file(test_saves(data) / ("SAVEGAME." + std::to_string(slot)));
+        game.update(kFrameUs);
+        World& w = game.world();
+        const UsecodeFile& uc = game.machine().usecode();
+        ObjId timer = 0, roller = 0;
+        int delay = 0;
+        w.for_each([&](const Item& i) {
+            if (i.parent || (i.flags & 0x1000) || !uc.has_class(i.shape)) return;
+            const std::string cls = uc.class_name(i.shape);
+            // The delay: map array * 256 + NPC number (TIMER_00C0).
+            const int d = i.map_number * 256 + i.npc_number;
+            if (!timer && cls == "TIMER" && d > 0 && d < 600 && !((i.quality >> 8) & 1)) timer = i.id, delay = d;
+            if (!roller && (cls == "ROLLB_NS" || cls == "ROLLB_EW")) roller = i.id;
+        });
+        if (!timer || !roller) continue;
+        std::printf("saved busy: save %d, timer %u (delay %d), roller %u\n", slot, timer, delay, roller);
+        for (ObjId id : {timer, roller}) w.get(id)->flags |= 0x1000;
+        game.save_game(9);
+        game.load_save(9);
+        World& loaded = game.world();
+        const auto runs = [&](ObjId id) {
+            int n = 0;
+            game.kernel().for_each_process([&](const Process& p) { n += p.owner() == id; });
+            return n;
+        };
+        game.update(kFrameUs);
+        CHECK(runs(roller) >= 1 && (loaded.get(roller)->flags & 0x1000));
+        CHECK(loaded.get(timer)->flags & 0x1000);
+        int frames = 0;
+        for (; frames < 4 * delay + 60 && (loaded.get(timer)->flags & 0x1000); ++frames) game.update(kFrameUs);
+        std::printf("saved busy: timer done after %d frames\n", frames);
+        CHECK(!(loaded.get(timer)->flags & 0x1000));
+        CHECK(game.machine().faults().empty());
+        return;
+    }
+    std::printf("saved busy: no save with a one-shot timer and a roller\n");
+    CHECK(false);
+}
+
 // The autosave (port addition): SAVEGAME.12 is written when a keypad's code
 // matches, a keycard is picked up, a mission starts or a movie ends, only when
-// GameConfig::autosave is on, and F6 loads it back.
+// GameConfig::autosave is on, and F6 loads it back. The keypad's waits for
+// the end of its KEYPAD script: saved at once, the keypad kept its busy bit
+// (0x1000) and the door was not open yet, for good once loaded. A keypad
+// saved busy all the same (a save made during that script) is freed.
 void test_autosave(const std::filesystem::path& data) {
     const auto dir = std::filesystem::temp_directory_path() / "crusader_autosave_test";
     const auto autosave = dir / ("SAVEGAME." + std::to_string(Game::kAutoSave));
@@ -2373,8 +2598,12 @@ void test_autosave(const std::filesystem::path& data) {
         enable(game);
         game.load_save(2);
         code(game, true);
+        CHECK(!std::filesystem::exists(autosave) && (game.world().get(5459)->flags & 0x1000));
+        for (int f = 0; f < 600 && !std::filesystem::exists(autosave); ++f) game.update(kFrameUs);
         CHECK(std::filesystem::exists(autosave) && game.autosave_icon_shown());
-        for (int f = 0; f < 200; ++f) game.update(kFrameUs);
+        // The floppy disk goes after 2.5 s (150 frames), before the opened
+        // door's keycard check saves again (I_hasKeycard, ~170 ticks on).
+        for (int f = 0; f < 155; ++f) game.update(kFrameUs);
         CHECK(!game.autosave_icon_shown());
         // It loads like any save (F6 asks, Enter... here the slot directly).
         Game again(data, test_saves(data));
@@ -2382,6 +2611,18 @@ void test_autosave(const std::filesystem::path& data) {
         again.load_save(Game::kAutoSave);
         CHECK(again.world().get(1) && again.world().get(1)->x == game.world().get(1)->x);
         CHECK(again.machine().faults().empty());
+        const std::uint16_t keypad = again.world().get(5459)->flags;
+        std::printf("autosave: keypad flags %04X once loaded\n", keypad);
+        CHECK(!(keypad & 0x1000) && (keypad & 0x0004));
+    }
+    {
+        Game game(data, test_saves(data));
+        game.set_save_dir(dir);
+        game.load_save(2);
+        game.world().get(5459)->flags |= 0x1000;
+        game.save_game(Game::kAutoSave);
+        game.load_save(Game::kAutoSave);
+        CHECK(!(game.world().get(5459)->flags & 0x1000));
     }
     // Switched off: nothing.
     fresh();
@@ -2784,17 +3025,25 @@ void test_death_called_from_anim(const std::filesystem::path& data) {
     game.load_save(13);
     for (int i = 0; i < 5; ++i) game.update(kFrameUs);
     World& w = game.world();
-    // A guard put beside the player, where it stands on something.
+    // A guard put near the player, where it stands on something, and away
+    // from the floors that take no blood: NPC fn 32 (NPCDEATH 0CC2) finds
+    // none of these shapes within 160 of the dead guard (CATWALK2 0x132 is
+    // under the player).
+    static constexpr std::uint8_t kNoBlood[] = {
+        'N', 0x2F, 1, 0x65, 3, 0x66, 3, 0xCD, 4, 0x36, 3, 0x90, 2, 0xCD, 0,
+        0x5F, 0, 0xD1, 0, 0x32, 1, 0x5F, 3, 0x62, 3, 0x5E, 3, 0x6C, 3, '$'};
     const ObjId victim = 2;
     const Item* player = w.get(1);
     CHECK(w.get(victim) && w.get(victim)->shape == 0x2FD && !w.is_dead(victim));
     bool placed = false;
     World::Point at{};
-    for (int dir = 0; dir < 16 && !placed; dir += 2) {
-        at = {player->x + kDirectionDx[dir] * 96, player->y + kDirectionDy[dir] * 96, player->z};
-        w.move_item(victim, at.x, at.y, at.z);
-        placed = (support_mask(w, 0x2FD, at.x, at.y, at.z, true, victim) & 0x10) &&
-                 position_free(w, 0x2FD, at, nullptr, victim);
+    for (int step = 1; step <= 6 && !placed; ++step) {
+        for (int dir = 0; dir < 16 && !placed; dir += 2) {
+            at = {player->x + kDirectionDx[dir] * 96 * step, player->y + kDirectionDy[dir] * 96 * step, player->z};
+            w.move_item(victim, at.x, at.y, at.z);
+            placed = (support_mask(w, 0x2FD, at.x, at.y, at.z, true, victim) & 0x10) &&
+                     position_free(w, 0x2FD, at, nullptr, victim) && w.area_search(victim, 160, kNoBlood).empty();
+        }
     }
     CHECK(placed);
     std::set<ObjId> ids_before;
@@ -3103,6 +3352,89 @@ void test_aim_mode(const std::filesystem::path& data) {
     CHECK(game.machine().faults().empty());
 }
 
+// Port addition: the right stick aims where it points on screen
+// (aim_mode.cpp, aim_at_angle). The bug's save: the Silencer on a catwalk,
+// soldier 110 on the floor below (88 lower), a camera (8430) in the
+// neighbouring direction behind a pillar. The stick pushed at the soldier as
+// the screen shows him used to give that neighbouring direction (a mere
+// rotation of the screen, and the soldier's height left out): the shot went
+// to the camera, or with precise aim to the crosshair, over his head.
+void test_stick_aim_floor_below(const std::filesystem::path& data) {
+    Game game(data, test_saves(data));
+    game.load_save_file(test_saves(data) / "visee-etage-inferieur.sav");
+    GameConfig config = game.config();
+    config.precise_aim = false;
+    config.draw_on_aim = true;
+    game.set_config(config);
+    for (int i = 0; i < 5; ++i) game.update(kFrameUs);
+    World& w = game.world();
+    const AnimDat& anims = game.animations();
+    const GameState::Aim& aim = w.state.aim;
+    constexpr ObjId kSoldier = 110, kCamera = 8430;
+    const Item* soldier = w.get(kSoldier);
+    CHECK(soldier && soldier->shape == 0x371 && !w.is_dead(kSoldier) && w.get(kCamera));
+    if (!soldier || !w.get(kCamera)) return;
+    // Held still: the aim is checked, not the fight.
+    for (Pid pid = 1; pid < 400; ++pid)
+        if (Process* p = game.kernel().get(pid); p && p->owner() == kSoldier) p->fail();
+    const Item* player = w.get(1);
+    const ShapeInfo* info = w.shape_info(player->shape);
+    const int cx = static_cast<std::uint16_t>(player->x - info->footpad_x * 8);
+    const int cy = static_cast<std::uint16_t>(player->y - info->footpad_y * 8);
+    // A screen angle of the offset (dx, dy, dz) from the crosshair's centre.
+    auto screen_deg = [](double dx, double dy, double dz) {
+        return std::atan2(-((dx + dy) / 4 - dz), (dx - dy) / 2) * 180.0 / 3.14159265358979;
+    };
+
+    // The world's x axis shows at 26.6 degrees below screen east: the stick
+    // there puts the crosshair on it (a rotation gave 342 degrees).
+    game.set_aim_stick(true, screen_deg(1, 0, 0));
+    settle(game);
+    for (int i = 0; i < 5; ++i) game.update(kFrameUs);
+    const ScreenSprite* cross = w.state.screen_sprites.get(aim.crosshair);
+    std::printf("stick aim: x axis -> angle %d, crosshair offset (%d, %d), direction %d\n", aim.angle,
+                cross ? cross->x - cx : 0, cross ? cross->y - cy : 0, w.npc_direction(1) & 0xF);
+    CHECK(aim.active && aim.angle == 0 && aim.stick_target == 0);
+    CHECK(cross && std::abs(cross->y - cy) <= 1 && (w.npc_direction(1) & 0xF) == 4);
+    CHECK(world_angle_of_screen(0) == 315 && world_angle_of_screen(-90) == 45 && world_angle_of_screen(90) == 225);
+
+    // The soldier as the screen shows him, from the crosshair's height.
+    const World::Point a = aim_point(w, 1, kSoldier);
+    const double at = screen_deg(static_cast<std::int16_t>(a.x - cx), static_cast<std::int16_t>(a.y - cy),
+                                 a.z - (static_cast<int>(cross ? cross->z : player->z)));
+    const int soldier_dir = closest_direction_in_range(player->x, player->y, soldier->x, soldier->y, 16, 0, 15);
+    // Precise aim: the stick takes him, the Silencer faces him, the shot and
+    // the marker take him.
+    config.precise_aim = true;
+    game.set_config(config);
+    game.set_aim_stick(true, at + 12);  // within the 20 degrees of the stick
+    settle(game);
+    for (int i = 0; i < 5; ++i) game.update(kFrameUs);
+    const int dir = w.npc_direction(1) & 0xF;
+    std::printf("stick aim: soldier at %.1f degrees on screen, direction %d (his %d), stick target %u, shot target %u\n",
+                at, dir, soldier_dir, aim.stick_target, find_target(w, 1, dir, true, &anims));
+    CHECK(aim.stick_target == kSoldier && dir == soldier_dir);
+    CHECK(find_target(w, 1, dir, true, &anims) == kSoldier);
+    const int hp = w.npc_hp(kSoldier);
+    bool hit = false;
+    for (int shot = 0; shot < 5 && !hit; ++shot) {  // the spread may miss
+        fire_from_muzzle(game, 1, dir, 11, true);
+        for (int frames = 0; frames < 300 && projectiles(game) != 0; ++frames) game.update(kFrameUs);
+        hit = w.npc_hp(kSoldier) < hp;
+    }
+    std::printf("stick aim: soldier hp %d -> %u\n", hp, w.npc_hp(kSoldier));
+    CHECK(hit);
+    // The camera, in the next direction, stays out of reach behind its pillar:
+    // the stick pointed at it takes nothing.
+    game.set_aim_stick(true, at - 45);
+    for (int i = 0; i < 5; ++i) game.update(kFrameUs);
+    std::printf("stick aim: 45 degrees off, stick target %u\n", aim.stick_target);
+    CHECK(aim.stick_target != kCamera && aim.stick_target != kSoldier);
+    game.set_aim_stick(false, 0);
+    settle(game);
+    CHECK(game.machine().faults().empty());
+}
+
 // Port addition: pushing the aim stick of directional aiming draws the weapon
 // by itself (aim_mode.cpp, aim_at_angle), without the fire key first.
 void test_aim_stick_draws(const std::filesystem::path& data) {
@@ -3175,6 +3507,7 @@ void test_aim_stick_draws(const std::filesystem::path& data) {
     for (int step = 0; step < 3; ++step) {
         do_anim(game.kernel(), w, game.animations(), 1, 0x1C, kDirCurrent);
         for (int i = 0; i < 400 && actor_busy(game.kernel(), 1); ++i) {
+            const std::int32_t px = w.get(1)->x, py = w.get(1)->y;
             game.update(kFrameUs);
             ++frames;
             left_mode |= !aim.active;
@@ -3182,10 +3515,15 @@ void test_aim_stick_draws(const std::filesystem::path& data) {
                 ++hidden;
                 continue;
             }
-            // Placed before the frame's slice moves him: one frame behind
-            // at most (a step is 16 units at most).
+            // Placed before the frame's slice moves him: on time, or one
+            // frame behind, by the step he just took (up to 20 units a
+            // side in this side step's frames).
             const auto o = offset();
-            if (std::abs(o.first - before.first) > 16 || std::abs(o.second - before.second) > 16) ++off;
+            const int mx = w.get(1)->x - px, my = w.get(1)->y - py;
+            const bool on_time = std::abs(o.first - before.first) <= 1 && std::abs(o.second - before.second) <= 1;
+            const bool behind =
+                std::abs(o.first + mx - before.first) <= 1 && std::abs(o.second + my - before.second) <= 1;
+            if (!on_time && !behind) ++off;
         }
     }
     std::printf("aim stick side steps: moved (%d, %d), %d frames, crosshair hidden %d, off %d, mode left %d\n",
@@ -3291,6 +3629,42 @@ void test_player_combat_flag(const std::filesystem::path& data) {
     for (int i = 0; i < 10; ++i) game.update(kFrameUs);
     CHECK(!in_combat(w, 1));
     CHECK(game.machine().faults().empty());
+}
+
+// Issue #16 (mission 5, English version): the contact who gives the keycard
+// played his movie but stayed unseen. MISS5 (egg type 0x11) destroys its egg,
+// then looks around it for the item 0x21E that leads to the door the contact
+// (NPC 82) comes out by. The original reads the centre's x/y in the item
+// arrays, which a free slot keeps; the port found nothing around a destroyed
+// item, so the door stayed shut and the contact walked into it, behind the
+// wall. The save comes from the English 1.01, whose usecode globals are not
+// laid out as the French ones: the global MISS5 reads the player from
+// (0x3C) is set back.
+void test_mission5_contact_comes_out(const std::filesystem::path& data) {
+    constexpr ObjId kEgg = 6703, kContact = 82;
+    Game game(data, test_saves(data));
+    game.load_save_file(test_saves(data) / "contact-invisible-mission5-issue16.sav");
+    World& w = game.world();
+    const Item* egg = w.get(kEgg);
+    const Item* contact = w.get(kContact);
+    CHECK(egg && egg->quality == 0x11 && contact && contact->shape == 0x4E0);
+    if (!egg || !contact) return;
+    const std::int32_t hidden_y = contact->y;
+    game.machine().globals()[0x3C] = 1;
+    game.machine().globals()[0x3D] = 0;
+    w.teleport(1, egg->x, egg->y, egg->z, w.current_map());
+    int frames = 0;
+    while (!game.movie() && frames < 900) {
+        game.update(kFrameUs);
+        ++frames;
+    }
+    contact = w.get(kContact);
+    const Item* player = w.get(1);
+    std::printf("mission 5 contact: movie after %d frames, egg %s, contact y %d -> %d (player y %d)\n", frames,
+                w.get(kEgg) ? "kept" : "gone", hidden_y, contact ? contact->y : 0, player->y);
+    CHECK(game.movie() != nullptr && !w.get(kEgg));
+    CHECK(contact && !contact->off_map && (contact->flags & kItemFastArea));
+    CHECK(contact && contact->y > hidden_y + 200 && std::abs(contact->y - player->y) < 64);
 }
 
 // Issue #8: with a weapon, the run is armed (3 -> 0x31) and so is its stop
@@ -3989,6 +4363,33 @@ void test_mines(const std::filesystem::path& data) {
     CHECK(game.machine().faults().empty() && game.machine().unbound_intrinsic_calls().empty());
 }
 
+// The same mine shot from 160 east, by a shot whose spread takes it down
+// to z 0 under the mine: the step that ends at z 0 is swept in parts of 16
+// (SPRITE_1140_1098), meets the mine (1 high, 1 above the floor) on the way
+// down and blows it up. The port ended such a step on nothing, unswept.
+void test_shot_mine(const std::filesystem::path& data) {
+    constexpr ObjId kMine = 6035;
+    Game game(data, test_saves(data));
+    game.load_save(2);
+    World& w = game.world();
+    const Item* mine = w.get(kMine);
+    CHECK(mine && mine->shape == 0x29F && mine->frame == 0);
+    if (!mine) return;
+    w.move_item(1, mine->x + 160, mine->y, mine->z);
+    game.update(kFrameUs);
+    const Item* player = w.get(1);
+    const World::Point start{player->x, player->y, player->z + 40};
+    World::Point target = aim_point(w, 1, kMine);
+    target.z = 0;
+    game.kernel().add(std::make_unique<ProjectileProcess>(w, game.animations(), 1, start, target, 2, 20, 0));
+    for (int f = 0; f < 120 && projectiles(game) != 0; ++f) game.update(kFrameUs);
+    for (int f = 0; f < 60; ++f) game.update(kFrameUs);
+    std::printf("shot mine: mine frame %u status %04X\n", mine->frame, mine->flags);
+    CHECK(projectiles(game) == 0);
+    CHECK(mine->frame >= 2 && (mine->flags & 0x40));
+    CHECK(game.machine().faults().empty());
+}
+
 // The station pads of SAVEGAME.2, walked onto from the south: RECHFLNS 5693
 // (energy) and SICBFLNS 5514 (health). Their gotHit, a contact of the move
 // from the player whose centre is on the pad, holds him in stasis, places
@@ -4025,6 +4426,92 @@ void test_station_pads(const std::filesystem::path& data) {
         CHECK(stasis_frames > 0 && !w.state.avatar_in_stasis);
         CHECK(game.machine().faults().empty() && game.machine().unbound_intrinsic_calls().empty());
     }
+}
+
+// The turret of a surveillance monitor (issue #15): the monitor gives the
+// player the control of a BASEGUN NPC, which fires through the player's
+// fire key with the weapon of its slot 1. The turret is not a container
+// (family 1), so pop_into leaves that weapon on the map, equipped (0x200)
+// but not contained: a saved game then lost the slot at its load
+// (World::forget_lost_equipment) and the turret turned without firing.
+// - SAVEGAME.1 of the report, new scene: control, fire, back to the player,
+//   save, load, control again, fire.
+// - SAVEGAME.13 of the report, saved with the slot already lost: given back
+//   at the load (the weapon item is still there, equipped).
+void test_player_turret(const std::filesystem::path& data) {
+    constexpr ObjId kMonitor = 2119;  // SURCAMEW, low quality 0xFA
+    // Uses the monitor, dismisses its texts, and returns the NPC it gave.
+    const auto take_control = [](Game& game) {
+        World& w = game.world();
+        use_item(w, kMonitor);
+        for (int f = 0; f < 1500 && w.state.controlled_npc == 1; ++f) {
+            game.update(kFrameUs);
+            if (game.screen() && f % 20 == 0) {
+                game.key(0x1C, false, true, 0, 13);  // Enter
+                game.key(0x1C, false, false, 0, 0);
+            }
+        }
+        for (int f = 0; f < 120; ++f) game.update(kFrameUs);
+        return w.state.controlled_npc;
+    };
+    // Presses the fire key three times; returns the shots they gave.
+    const auto fire = [](Game& game) {
+        const int before = game.shots_fired();
+        for (int press = 0; press < 3; ++press) {
+            game.key(0x39, false, true, 0, ' ');  // Space
+            for (int f = 0; f < 60; ++f) game.update(kFrameUs);
+            game.key(0x39, false, false, 0, 0);
+            for (int f = 0; f < 60; ++f) game.update(kFrameUs);
+        }
+        return game.shots_fired() - before;
+    };
+    const auto weapon_shape = [](const World& w, ObjId npc) {
+        const Item* weapon = w.get(w.active_weapon(npc));
+        return weapon ? weapon->shape : 0;
+    };
+
+    const auto scratch = std::filesystem::temp_directory_path() / "cr_player_turret";
+    std::filesystem::create_directories(scratch);
+    {
+        Game game(data, scratch);
+        game.load_save_file(test_saves(data) / "issue15-tourelle-ne-tire-pas-SAVEGAME.1.sav");
+        for (int f = 0; f < 30; ++f) game.update(kFrameUs);
+        const ObjId turret = take_control(game);
+        const int shots = fire(game);
+        std::printf("player turret: new scene, NPC %u (shape %u), weapon shape %u, %d shots\n", turret,
+                    game.world().get(turret) ? game.world().get(turret)->shape : 0, weapon_shape(game.world(), turret), shots);
+        CHECK(turret > 1 && game.world().get(turret) && game.world().get(turret)->shape == 0x4C8);
+        CHECK(shots >= 3);
+        game.key(0x01, false, true, 0, 0x1B);  // Escape gives the control back
+        game.key(0x01, false, false, 0, 0);
+        for (int f = 0; f < 400; ++f) game.update(kFrameUs);
+        CHECK(game.world().state.controlled_npc == 1);
+
+        game.save_game(5);
+        Game again(data, scratch);
+        again.load_save(5);
+        std::printf("player turret: after save and load, weapon shape %u\n", weapon_shape(again.world(), turret));
+        CHECK(weapon_shape(again.world(), turret) == 909);
+        const ObjId second = take_control(again);
+        const int more = fire(again);
+        std::printf("player turret: after load, NPC %u, %d shots\n", second, more);
+        CHECK(second == turret && more >= 3);
+        CHECK(again.machine().faults().empty() && again.machine().unbound_intrinsic_calls().empty());
+    }
+    {
+        // The save of the report: NPC 24, its slot lost, its weapon 8736 on the map.
+        Game game(data, scratch);
+        game.load_save_file(test_saves(data) / "issue15-tourelle-ne-tire-pas-SAVEGAME.13.sav");
+        for (int f = 0; f < 30; ++f) game.update(kFrameUs);
+        std::printf("player turret: SAVEGAME.13 of the report, NPC 24 weapon shape %u\n", weapon_shape(game.world(), 24));
+        CHECK(game.world().npc_equip(24, 1) == 8736 && weapon_shape(game.world(), 24) == 909);
+        const ObjId turret = take_control(game);
+        const int shots = fire(game);
+        std::printf("player turret: SAVEGAME.13, NPC %u, %d shots\n", turret, shots);
+        CHECK(turret == 24 && shots >= 3);
+        CHECK(game.machine().faults().empty() && game.machine().unbound_intrinsic_calls().empty());
+    }
+    std::filesystem::remove_all(scratch);
 }
 
 // Wall guns (WALLGUN 0xA1A). The search for a target (WALLGUN_0A5F) is a
@@ -5104,6 +5591,63 @@ void test_weasel(const std::filesystem::path& data) {
     CHECK(!game.screen());
 }
 
+// Issue #13: Weasel's shop, drawn at a native resolution larger than 640 x
+// 480. The snapshot under each of Weasel's movies (640 x 480) resized the
+// view, so the fast area: items entering it again started their usecode at
+// the shop's raised kernel level, the booth's endless idle animation (type
+// 0x21B) among them. That level stayed up after the shop, the game below never
+// ran again and the Silencer stayed in stasis. The user's TEST23: in front of
+// the booth at the base, the shop opened by the selection (S, Enter).
+void test_weasel_native_view(const std::filesystem::path& data) {
+    Game game(data, test_saves(data));
+    game.load_save_file(test_saves(data) / "weasel-silencer-fige-en-resolution-native.sav");
+    World& w = game.world();
+    Surface8 screen(1280, 720);
+    const auto frame = [&] {
+        game.update(kFrameUs);
+        game.render(screen);
+    };
+    const auto frames = [&](int n) {
+        for (int i = 0; i < n; ++i) frame();
+    };
+    const auto gump = [&game] { return dynamic_cast<const WeaselGump*>(game.screen()); };
+    // Enter, held after the movie's fade in, skips it.
+    const auto skip_movie = [&] {
+        for (int n = 0; n < 10 && !game.movie(); ++n) frame();
+        CHECK(game.movie() != nullptr);
+        frames(90);
+        game.key(0x1C, false, true, 0, 0x0D);
+        frames(8);
+        game.key(0x1C, false, false, 0);
+        frames(3);
+        CHECK(!game.movie());
+    };
+    frames(60);
+    press(game, 0x1F, false, 's');
+    press(game, 0x1C, false, 0x0D);
+    for (int f = 0; f < 300 && !gump(); ++f) frame();
+    CHECK(gump() != nullptr);
+    if (!gump()) return;
+    skip_movie();
+    press(game, 0x01, false, 0x1B);  // exit, nothing bought
+    skip_movie();
+    press(game, 0x31, false, 'n');  // nothing else
+    frames(120);
+    std::printf("weasel native view: screen %d, stasis %d, kernel level %u\n", game.screen() != nullptr,
+                static_cast<int>(w.state.avatar_in_stasis), game.kernel().level());
+    CHECK(!game.screen() && !w.state.avatar_in_stasis && game.kernel().level() == 1);
+    // Facing east (free there), the Silencer walks.
+    const Item start = *w.get(1);
+    if (auto r = w.npc_record(1); !r.empty()) r[npc::kDirection] = 4;
+    game.key(0x48, true, true, 0);
+    frames(120);
+    game.key(0x48, true, false, 0);
+    const Item& now = *w.get(1);
+    std::printf("weasel native view: walked from (%d, %d) to (%d, %d)\n", start.x, start.y, now.x, now.y);
+    CHECK(now.x != start.x || now.y != start.y);
+    CHECK(game.machine().faults().empty());
+}
+
 // Milestone 7: saving with F9 (the save screen and its name), F5 (quick
 // save) and the menu's "save game", in a copy of the saves, then loading back.
 void test_save_game(const std::filesystem::path& data) {
@@ -5326,6 +5870,49 @@ void test_created_weapon_has_a_clip(const std::filesystem::path& data) {
     }
     std::printf("created weapons: %d checked, %d without a full clip\n", checked, empty);
     CHECK(checked > 0 && empty == 0);
+}
+
+// Issue #17: the BA-40 (0x32E) fires forever at difficulty 1 only. Setting the
+// difficulty (difficulty screen 13D0:2975 / 29B3, game load 1058:02F1) also
+// sets its ammo type DS:2172: none at level 1 (no ammo counter), else the
+// BA-41 clips (0x33D, 20 rounds).
+void test_pistol_ammo_by_difficulty(const std::filesystem::path& data) {
+    constexpr std::uint16_t kPistol = 0x32E, kClip = 0x33D;
+    for (int level : {1, 3, 1}) {
+        Game game(data, test_saves(data));
+        game.new_game(level);
+        World& w = game.world();
+        const bool unlimited = level == 1;
+        CHECK(dtable::ammo_shape(kPistol) == (unlimited ? 0 : kClip));
+        CHECK(dtable::clip_size(kPistol) == (unlimited ? 0 : 20));
+        // A pistol created (as MISS1EGG gives it) comes loaded with a clip.
+        const ObjId id = w.create(kPistol, 0);
+        CHECK(id && w.get(id)->quality == (unlimited ? 0 : 20));
+    }
+    // From the difficulty screen: Enter on the level below the selected one
+    // (so above 1), after a level 1 game.
+    {
+        Game g(data, test_saves(data));
+        g.load_save(1);
+        dtable::set_difficulty(1);
+        press(g, 0x01, false, 0x1B);
+        press(g, 0x1C, false, 0x0D);
+        press(g, 0x50, true);  // down
+        press(g, 0x1C, false, 0x0D);
+        g.update(kFrameUs);
+        CHECK(!g.menu() && g.world().state.difficulty >= 2 && dtable::ammo_shape(kPistol) == kClip);
+    }
+    // Loading a game sets it from the saved difficulty, whatever came before:
+    // SAVEGAME.1 is at level 1, garde-mort-debout.sav at level 3.
+    for (int saved : {1, 3}) {
+        const auto save = test_saves(data) / (saved == 1 ? "SAVEGAME.1" : "garde-mort-debout.sav");
+        if (!std::filesystem::exists(save)) continue;
+        Game game(data, test_saves(data));
+        dtable::set_difficulty(saved == 1 ? 3 : 1);
+        game.load_save_file(save);
+        CHECK(game.world().state.difficulty == saved);
+        CHECK(dtable::ammo_shape(kPistol) == (saved == 1 ? 0 : kClip));
+    }
 }
 
 // PBM2: walk forward to the mission's last scene. The avatar must get through
@@ -5586,6 +6173,42 @@ void test_jump_down_ends_standing(const std::filesystem::path& data) {
     CHECK(!actor_busy(game.kernel(), 1));
 }
 
+// SEB88: the chemist NPC 128 (CHEMSUIT, map 29), off screen, behind the laser
+// barrier. Off screen an animation plays two frames at once unless its current
+// frame is one of the last two (US 1158:1906), so it never passes the last
+// frame. The port tested the frame after the current one: the 11-frame death
+// went 8, 9, then 11 and ended without frame 10 (220) and its calledFromAnim
+// event. No NPCDEATH: the chemist stayed lying as an NPC and his DEATHBOX 4951
+// never stopped the TIMER 2105 that re-arms the barrier (SEB91, "barriere
+// laser qui se referme").
+void test_offscreen_death_reaches_last_frame(const std::filesystem::path& data) {
+    constexpr ObjId kChemist = 128;
+    Game game(data, test_saves(data));
+    game.load_save_file(test_saves(data) / "chimiste-128-vivant-avant-barriere.sav");
+    World& w = game.world();
+    for (int f = 0; f < 30; ++f) game.update(kFrameUs);
+    const Item* chemist = w.get(kChemist);
+    CHECK(chemist && chemist->shape == 758 && !w.is_dead(kChemist));
+    if (!chemist) return;
+    CHECK(!w.is_partly_on_screen(*chemist));
+    std::set<ObjId> ids_before;
+    w.for_each([&](const Item& i) { ids_before.insert(i.id); });
+    apply_damage(game.kernel(), w, game.animations(), kChemist, 1, 0, 250, 1);
+    CHECK(w.is_dead(kChemist));
+    std::set<int> frames;
+    for (int f = 0; f < 300 && w.get(kChemist); ++f) {
+        game.update(kFrameUs);
+        if (const Item* c = w.get(kChemist); c && c->parent == 0 && !c->off_map) frames.insert(c->frame);
+    }
+    int bodies = 0;
+    w.for_each([&](const Item& i) { bodies += !ids_before.count(i.id) && i.parent == 0 && i.shape != 758; });
+    std::printf("off-screen death: frames %d..%d, chemist %s, %d new items\n", frames.empty() ? -1 : *frames.begin(),
+                frames.empty() ? -1 : *frames.rbegin(), w.get(kChemist) ? "still there" : "set aside", bodies);
+    CHECK(frames.count(220) == 1);
+    CHECK(w.get(kChemist) == nullptr || w.get(kChemist)->parent != 0 || w.get(kChemist)->z == 254);
+    CHECK(game.machine().faults().empty());
+}
+
 
 // A clip destroyed (spent, or by the usecode) leaves the player's ammunition
 // slot it held: Item_forget pushes it out of the world (10B0:1C21), which
@@ -5629,13 +6252,73 @@ void test_weasel_buys_ammo_after_spent_clips(const std::filesystem::path& data) 
     CHECK(refused == 0);
 }
 
+// Mission 10, SEB40 (before the teleporter to the chemist's room): arriving
+// at teleport egg 13 makes the courier (0x45D), the chemist and two guards,
+// all of group 19, that of the green keycard 9 (egg 0x4E7 7453). NPCDEATH
+// gives the card to the first of them to die, and empties the courier, which
+// leaves no body (Container::I_destroyContents): killing it first loses the
+// card, in the original too (checked under DOSBox). With the original bug
+// fixes, the card is put down where the courier stood.
+void test_courier_keycard(const std::filesystem::path& data) {
+    constexpr ObjId kCardEgg = 7453, kShelfCard = 6486;
+    for (const bool fix : {false, true}) {
+        Game game(data, test_saves(data));
+        game.load_save_file(test_saves(data) / "mission10-chimiste-vivant.sav");
+        game.config().fix_original_bugs = fix;
+        World& w = game.world();
+        start_teleport_to_egg(game.kernel(), w, 19, 13, false, false);
+        const Item* egg = w.get(kCardEgg);
+        CHECK(egg && egg->quality == 0x0313);
+        if (!egg) return;
+        ObjId courier = 0;
+        for (int f = 0; f < 10 && !courier; ++f) {
+            game.update(kFrameUs);
+            for (ObjId id = 2; id < 256 && !courier; ++id) {
+                const Item* a = w.get(id);
+                if (a && a->shape == 0x45D && !a->parent && std::abs(a->x - egg->x) < 1500 &&
+                    std::abs(a->y - egg->y) < 1500)
+                    courier = id;
+            }
+        }
+        CHECK(courier != 0 && w.npc_record(courier)[npc::kEggQuality] == 19);
+        if (!courier) return;
+        const std::int32_t cx = w.get(courier)->x, cy = w.get(courier)->y;
+        apply_damage(game.kernel(), w, game.animations(), courier, 1, 0, 500, 2);
+        for (int f = 0; f < 600; ++f) game.update(kFrameUs);
+        const Item* card = nullptr;
+        w.for_each([&](const Item& i) {
+            if (i.shape == 0x111 && (i.quality & 0xFF) == 9 && i.id != kShelfCard) card = &i;
+        });
+        std::printf("courier keycard (fix %d): courier %u %s, egg 0x%04X, card %u parent %u at %d %d\n", fix,
+                    courier, w.get(courier) && !w.is_dead(courier) ? "alive" : "dead", w.get(kCardEgg)->quality,
+                    card ? card->id : 0u, card ? card->parent : 0u, card ? card->x - cx : 0, card ? card->y - cy : 0);
+        CHECK(w.get(kCardEgg)->quality == 0x0013);  // the card was given
+        if (!fix) {
+            CHECK(card == nullptr);
+        } else {
+            CHECK(card != nullptr && card->parent == 0 && card->frame == 2);
+            CHECK(card && std::abs(card->x - cx) < 256 && std::abs(card->y - cy) < 256);
+        }
+        CHECK(game.machine().faults().empty());
+    }
+}
+
 int main(int argc, char** argv) {
+    set_languages_dir(CRUSADER_LANGUAGES_DIR);  // the French texts (languages/fr/port.txt)
     const std::filesystem::path data = argc > 1 ? argv[1] : "data";
     if (!std::filesystem::exists(data / "STATIC/FIXED.DAT")) {
         std::printf("no game data, skipped\n");
         return 0;
     }
     if (!have_test_saves(data)) return 1;
+    if (argc > 2 && std::string(argv[2]) == "--player-turret") {
+        test_player_turret(data);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--weasel-native-view") {
+        test_weasel_native_view(data);
+        return failures ? 1 : 0;
+    }
     if (argc > 2 && std::string(argv[2]) == "--weasel-ammo") {
         test_destroyed_clip_leaves_its_slot(data);
         test_weasel_buys_ammo_after_spent_clips(data);
@@ -5644,6 +6327,18 @@ int main(int argc, char** argv) {
     if (argc > 2 && std::string(argv[2]) == "--editor-mod") {
         test_editor_mod(data);
         std::printf(failures ? "%d failure(s)\n" : "all checks passed\n", failures);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--keypad-door") {
+        test_keypad_door_after_reload(data);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--saved-busy") {
+        test_saved_busy_items(data);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--courier-keycard") {
+        test_courier_keycard(data);
         return failures ? 1 : 0;
     }
     if (argc > 2 && std::string(argv[2]) == "--blinking-scenery") {
@@ -5660,6 +6355,10 @@ int main(int argc, char** argv) {
         test_void_panel_behind_wall(data);
         return failures ? 1 : 0;
     }
+    if (argc > 2 && std::string(argv[2]) == "--offscreen-death") {
+        test_offscreen_death_reaches_last_frame(data);
+        return failures ? 1 : 0;
+    }
     if (argc > 2 && std::string(argv[2]) == "--jump-down") {
         test_jump_down_ends_standing(data);
         return failures ? 1 : 0;
@@ -5667,6 +6366,7 @@ int main(int argc, char** argv) {
     if (argc > 2 && std::string(argv[2]) == "--precise-aim") {
         test_aiming(data);
         test_precise_aim(data);
+        test_stick_aim_floor_below(data);
         test_aim_mode(data);
         std::printf(failures ? "%d failure(s)\n" : "all checks passed\n", failures);
         return failures ? 1 : 0;
@@ -5686,6 +6386,10 @@ int main(int argc, char** argv) {
         test_death_out_of_fast_area(data);
         test_other_map_npc_hidden(data);
         test_other_map_npc_out_of_fast_area(data);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--mission5-contact") {
+        test_mission5_contact_comes_out(data);
         return failures ? 1 : 0;
     }
     if (argc > 2 && std::string(argv[2]) == "--inventory-keys") {
@@ -5724,6 +6428,14 @@ int main(int argc, char** argv) {
         test_floor_pad(data);
         return failures ? 1 : 0;
     }
+    if (argc > 2 && std::string(argv[2]) == "--pistol-ammo") {
+        test_pistol_ammo_by_difficulty(data);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--fades") {
+        test_fades(data);
+        return failures ? 1 : 0;
+    }
     test_load_and_run(data);
     test_alert(data);
     test_player_walks(data);
@@ -5737,13 +6449,15 @@ int main(int argc, char** argv) {
     test_auto_save_names(data);
     test_crate_destroyed(data);
     test_created_weapon_has_a_clip(data);
+    test_pistol_ammo_by_difficulty(data);
 
     test_fades(data);
     test_credits(data);
     test_options(data);
     test_firing(data);
+    test_remains_loot(data);
     test_combat_zone(data);
-    test_rocket_vibration(data);
+    test_machine_gun_vibration(data);
     test_auto_firer(data);
     test_anim_end(data);
     test_special_frames(data);
@@ -5760,6 +6474,8 @@ int main(int argc, char** argv) {
     test_computer(data);
     test_keypad(data);
     test_autosave(data);
+    test_keypad_door_after_reload(data);
+    test_saved_busy_items(data);
     test_monitor(data);
     test_security_camera(data);
     test_energy_walls(data);
@@ -5778,6 +6494,7 @@ int main(int argc, char** argv) {
     test_mouse_in_play(data);
     test_hard_landing(data);
     test_jump_down_ends_standing(data);
+    test_offscreen_death_reaches_last_frame(data);
     test_blocked_step(data);
     test_shot_kills(data);
     test_death_called_from_anim(data);
@@ -5785,12 +6502,16 @@ int main(int argc, char** argv) {
     test_end_credits(data);
     test_start_up(data);
     test_weasel(data);
+    test_weasel_native_view(data);
     test_destroyed_clip_leaves_its_slot(data);
     test_weasel_buys_ammo_after_spent_clips(data);
+    test_courier_keycard(data);
     test_barrels(data);
     test_mines(data);
+    test_shot_mine(data);
     test_station_pads(data);
     test_turrets(data);
+    test_player_turret(data);
     test_monitors(data);
     test_scenery_animation(data);
     test_steam_valve_save(data);
@@ -5804,11 +6525,13 @@ int main(int argc, char** argv) {
     test_death_out_of_fast_area(data);
     test_other_map_npc_hidden(data);
     test_other_map_npc_out_of_fast_area(data);
+    test_mission5_contact_comes_out(data);
     test_processes_end_with_their_item(data);
     test_aiming(data);
     test_precise_aim(data);
     test_aim_mode(data);
     test_aim_stick_draws(data);
+    test_stick_aim_floor_below(data);
     test_crosshair_shot_height(data);
     test_player_combat_flag(data);
     test_run_stop_stays_armed(data);

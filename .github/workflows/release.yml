@@ -75,7 +75,13 @@ jobs:
       - name: Cross-build (PortMaster)
         if: matrix.name == 'portmaster-aarch64'
         run: |
-          pip install ziglang ninja
+          # Pinned to the versions the cross-build is tested with. pip does not retry
+          # a download cut short (it reports a hash mismatch), so retry here.
+          for i in 1 2 3 4 5; do
+            pip install --no-cache-dir ziglang==0.16.0 ninja==1.13.2 && break
+            [ "$i" = 5 ] && exit 1
+            sleep 10
+          done
           python3 tools/portmaster/build.py --out build-portmaster --version "v$VERSION"
       - name: Package (PortMaster)
         if: matrix.name == 'portmaster-aarch64'
@@ -88,6 +94,7 @@ jobs:
           cp tools/portmaster/port/Crusader.sh "dist/$pkg/"
           cp tools/portmaster/port/crusader/licenses/* "dist/$pkg/crusader/licenses/"
           cp build-portmaster/crusader "dist/$pkg/crusader/"
+          cp -r languages "dist/$pkg/crusader/"
           cp tools/release/PUT_GAME_DATA_HERE.txt "dist/$pkg/crusader/data/"
           cp tools/portmaster/port/{port.json,README.md,gameinfo.xml} "dist/$pkg/"
           [ -f tools/portmaster/port/screenshot.png ] && cp tools/portmaster/port/screenshot.png "dist/$pkg/"
@@ -106,6 +113,7 @@ jobs:
           else
             cp build/crusader build/crusader-editor "dist/$pkg/"
           fi
+          cp -r languages "dist/$pkg/"
           mkdir "dist/$pkg/data"
           cp tools/release/PUT_GAME_DATA_HERE.txt "dist/$pkg/data/"
           cp README.md "dist/$pkg/"

@@ -10,7 +10,9 @@
 #include "engine/usecode/world_intrinsics.hpp"
 #include "engine/world/actor_anim.hpp"
 #include "engine/world/attack.hpp"
+#include "engine/world/casings.hpp"
 #include "engine/world/collision.hpp"
+#include "engine/world/damage_marks.hpp"
 #include "engine/world/gravity.hpp"
 #include "engine/world/pathfind.hpp"
 #include "engine/world/render.hpp"
@@ -179,6 +181,9 @@ void test_item_intrinsics() {
     // destroy(this)
     run_on_item(w, id, {0x40, 0x06, 0x0F, 0x04, 0x0A, 0x00, 0x6E, 0xFC, 0x50});
     CHECK(w.get(id) == nullptr);
+
+    // getShape (0x016) still reads the free slot's shape (10A8:068F).
+    CHECK(run_on_item(w, id, {0x40, 0x06, 0x0F, 0x04, 0x16, 0x00, 0x6E, 0xFC, 0x5E, 0x60, 0x08, 0x50}) == 0x123);
 }
 
 // Typeflags with a container (shape 6, family 6, footpad 2x3x4) and a
@@ -454,6 +459,10 @@ void test_item_search() {
     w.destroy(c);
     CHECK(w.cells_consistent());
     CHECK((w.area_search(centre, 1000, all) == std::vector<ObjId>{b, centre, d}));
+    // A destroyed centre: its free slot keeps its x/y, which the original
+    // searches around (MISS5's egg, issue #16).
+    w.destroy(centre);
+    CHECK((w.area_search(centre, 1000, all) == std::vector<ObjId>{b, d}));
 
     // Container search: contents in order.
     Item box;
@@ -765,6 +774,9 @@ void test_walk_alignment() {
         w.add_with_id(player);
         w.set_camera(100, 100, 0);
         w.state.controlled_npc = 1;
+        // On screen: no frame skipping (1158:1906 plays two frames at once
+        // for an actor out of view).
+        w.set_frame_lookup([](std::uint16_t, std::uint16_t) { return std::optional<FrameBox>{{4000, 4000, 2000, 2000}}; });
         Kernel k;
         do_anim(k, w, anims, 1, 1, 4);
         for (int f = 0; f < 10; ++f) {
@@ -1181,7 +1193,334 @@ void test_save_fresh_slots() {
 
 }  // namespace
 
+// Port addition: the impact marks (damage_marks.hpp).
+void test_impact_marks() {
+    CHECK(mark_kind(1) == MarkKind::Bullet && mark_kind(0xD) == MarkKind::Bullet);
+    CHECK(mark_kind(3) == MarkKind::Scorch && mark_kind(0xA) == MarkKind::Scorch);  // they splash
+    CHECK(mark_kind(6) == MarkKind::Burn && mark_kind(7) == MarkKind::Burn);
+
+    // A grey ramp: darker colours, never a cycled one (1..14) nor 0xFF.
+    Palette pal;
+    for (int c = 0; c < 256; ++c) {
+        const auto v = static_cast<std::uint8_t>(c);
+        pal.colors[c] = {v, v, v};
+    }
+    const auto half = shade_table(pal, 50);
+    CHECK(half[200] == 100 && half[100] == 50 && half[20] == 15 && half[5] == 5);
+    for (int c = 0; c < 256; ++c)
+        CHECK(half[c] <= c && (half[c] == c || half[c] > 14 || half[c] == 0) && half[c] != 0xFF);
+
+    CHECK(mark_pattern(MarkKind::Bullet, 1, false, 0).size() >= 3);
+    const auto wall = mark_pattern(MarkKind::Scorch, 12, false, 7), floor = mark_pattern(MarkKind::Scorch, 12, true, 7);
+    CHECK(!wall.empty() && floor.size() < wall.size());
+    for (const MarkPixel& px : floor) CHECK(std::abs(px.dy) <= 6 && std::abs(px.dx) <= 12 && px.shade <= 3);
+
+    // Shape 6: a box of 2 x 3 x 4 footpads (32 x 48 x 32 units); shape 8 a
+    // flat floor of 4 x 4.
+    std::vector<ShapeInfo> tf = test_typeflags();
+    tf[8].footpad_x = 4;
+    tf[8].footpad_y = 4;
+    tf[9].flags = ShapeInfo::kTranslucent;
+    World w(tf);
+    const auto place = [&](std::uint16_t shape, std::int32_t x, std::int32_t y, std::int32_t z) {
+        const ObjId id = w.create(shape, 0);
+        w.pop_to_coords(x, y, z);
+        return id;
+    };
+    const ObjId crate = place(6, 1000, 1000, 0);
+    const ObjId floor_tile = place(8, 1200, 1200, 0);
+    const ObjId glass = place(9, 1400, 1000, 0);
+
+    DamageMarks marks;
+    // A bullet stopped in front of the +x face: marked where it hit, its
+    // screen offset from the crate's anchor.
+    marks.record(w, crate, {1004, 990, 16}, 1);
+    CHECK(marks.size() == 1);
+    if (marks.size() == 1) {
+        const DamageMarks::Mark& m = marks.marks().front();
+        CHECK(m.host == crate && m.kind == MarkKind::Bullet && !m.flat);
+        CHECK(m.dx == ((1000 - 990) >> 1) - 0 && m.dy == ((1000 + 990) >> 2) - 16 - ((2000 >> 2) - 0));
+    }
+    // From behind (the -x face, unseen), on a translucent item: no mark.
+    marks.record(w, crate, {1000 - 32 - 8, 990, 16}, 1);
+    marks.record(w, glass, {1404, 990, 16}, 1);
+    CHECK(marks.size() == 1);
+    // On nothing, over the floor: on the floor, flat.
+    marks.record(w, 0, {1150, 1150, 0}, 0x14);
+    CHECK(marks.size() == 2 && marks.marks().back().host == floor_tile && marks.marks().back().flat &&
+          marks.marks().back().kind == MarkKind::Burn);
+    // In the air: nothing.
+    marks.record(w, 0, {1150, 1150, 60}, 1);
+    CHECK(marks.size() == 2);
+    // An explosion in front of the crate, over the floor: a scorch on each,
+    // none on an NPC; on the floor centred under the blast, squashed.
+    Item npc;
+    npc.id = 5;
+    npc.shape = 6;
+    npc.x = 1010;
+    npc.y = 1020;
+    w.add_with_id(npc);
+    const ObjId floor_near = place(8, 1064, 1064, 0);
+    marks.record(w, 0, {1012, 1012, 8}, 3);
+    std::set<ObjId> scorched;
+    for (const auto& m : marks.marks())
+        if (m.kind == MarkKind::Scorch) scorched.insert(m.host);
+    CHECK(scorched.count(crate) == 1 && scorched.count(floor_near) == 1 && scorched.count(5) == 0);
+    for (const auto& m : marks.marks()) {
+        if (m.kind != MarkKind::Scorch || m.host != floor_near) continue;
+        CHECK(m.flat && m.dx == ((1012 - 1012) >> 1) - 0 && m.dy == ((2024 >> 2) - 0) - (2128 >> 2));
+    }
+
+    // Drawn inside the host's opaque pixels only, darker: the frame's
+    // opaque columns are screen x 28..31, rows 28..35; the hole is at
+    // (32..33, 32..33), its rim at x 31 or 34.
+    DamageMarks one;
+    one.record(w, crate, {1004, 990, 16}, 1);
+    one.prepare(w, pal);
+    CHECK(one.size() == 1);
+    const int mdx = one.marks().front().dx, mdy = one.marks().front().dy;
+    std::vector<std::uint8_t> rle;
+    ShapeFrame frame;
+    frame.width = 8;
+    frame.height = 8;
+    frame.xoff = (32 - mdx) - 28;
+    frame.yoff = (32 - mdy) - 28;
+    for (int y = 0; y < 8; ++y) {
+        frame.lines.push_back(static_cast<std::uint32_t>(rle.size()));
+        rle.insert(rle.end(), {0, 4, 200, 200, 200, 200, 4});
+    }
+    frame.rle = rle;
+    Surface8 screen(64, 64, 200);
+    DrawItem d{};
+    d.item = w.get(crate);
+    d.frame = &frame;
+    d.sx = 32 - mdx;
+    d.sy = 32 - mdy;
+    one.draw(screen, d);
+    int outside = 0;
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x)
+            if (screen.row(y)[x] != 200 && (x < 28 || x > 31 || y < 28 || y > 35)) ++outside;
+    CHECK(outside == 0 && screen.row(32)[32] == 200);
+    // Over a frame opaque all around it (screen x 31..34), the hole is
+    // drawn: almost black.
+    ShapeFrame frame2 = frame;
+    frame2.width = 4;
+    frame2.xoff = (32 - mdx) - 31;
+    d.frame = &frame2;
+    Surface8 screen2(64, 64, 200);
+    one.draw(screen2, d);
+    CHECK(screen2.row(32)[32] < 100 && screen2.row(32)[33] < 100);
+
+    // A host that moves loses its marks.
+    w.move_item(crate, 1010, 1000, 0);
+    one.prepare(w, pal);
+    CHECK(one.size() == 0);
+}
+
+// Port addition: the blood marks (damage_marks.hpp).
+void test_blood_marks() {
+    // Grey ramp, one colour the dark red tint of grey 200 lands on exactly.
+    Palette pal;
+    for (int c = 0; c < 256; ++c) {
+        const auto v = static_cast<std::uint8_t>(c);
+        pal.colors[c] = {v, v, v};
+    }
+    pal.colors[50] = {152, 68, 66};  // 200 mixed 68 % with (130, 6, 4)
+    CHECK(tint_table(pal, {130, 6, 4}, 68)[200] == 50);
+    CHECK(tint_table(pal, {130, 6, 4}, 68)[7] == 7);
+
+    // Patterns: blood shades only; a spray on a wall drips below its splash.
+    const auto spray = mark_pattern(MarkKind::BloodSpray, 6, false, 3, 0.0);
+    const auto pool = mark_pattern(MarkKind::BloodPool, 10, true, 3, 0.0);
+    int lowest = 0;
+    for (const MarkPixel& px : spray) {
+        CHECK(px.shade >= 4 && px.shade <= 6);
+        lowest = std::max(lowest, static_cast<int>(px.dy));
+    }
+    CHECK(lowest > 6);
+    for (const MarkPixel& px : pool) CHECK(px.shade >= 4 && px.shade <= 6 && std::abs(px.dy) <= 10);
+
+    // An NPC (shape 6: 32 x 48 x 32 units) at (1000, 1000), centre (984,
+    // 976), on two floor tiles (shape 8, 64 x 64), a wall (shape 10, 16 x 64
+    // x 40) behind it towards -x, whose +x face the camera sees.
+    std::vector<ShapeInfo> tf = test_typeflags();
+    tf[8].footpad_x = 4;
+    tf[8].footpad_y = 4;
+    tf[10].footpad_x = 1;
+    tf[10].footpad_y = 4;
+    tf[10].footpad_z = 5;
+    World w(tf);
+    const auto place = [&](std::uint16_t shape, std::int32_t x, std::int32_t y, std::int32_t z) {
+        const ObjId id = w.create(shape, 0);
+        w.pop_to_coords(x, y, z);
+        return id;
+    };
+    const ObjId near_tile = place(8, 1000, 1000, 0);
+    const ObjId far_tile = place(8, 936, 1000, 0);
+    const ObjId wall = place(10, 940, 1010, 0);
+    Item npc;
+    npc.id = 7;
+    npc.shape = 6;
+    npc.x = 1000;
+    npc.y = 1000;
+    w.add_with_id(npc);
+    const auto count = [](const DamageMarks& m, MarkKind kind, ObjId host = 0) {
+        int n = 0;
+        for (const auto& mark : m.marks()) n += mark.kind == kind && (host == 0 || mark.host == host);
+        return n;
+    };
+
+    // A robot, an energy weapon: no blood.
+    DamageMarks marks;
+    marks.bleed(w, Wound{7, 1, 1100, 976, 20, 30, true, false});
+    marks.bleed(w, Wound{7, 6, 1100, 976, 20, 30, true, true});
+    CHECK(marks.size() == 0);
+
+    // A bullet that kills, shot from +x: a spray on the wall behind, drops
+    // on the floor between.
+    marks.bleed(w, Wound{7, 1, 1100, 976, 20, 30, true, true});
+    CHECK(count(marks, MarkKind::BloodSpray, wall) == 1);
+    CHECK(count(marks, MarkKind::BloodDrop) >= 3);
+    for (const auto& m : marks.marks()) {
+        CHECK(m.kind != MarkKind::BloodDrop || (m.flat && (m.host == near_tile || m.host == far_tile)));
+        CHECK(m.kind != MarkKind::BloodSpray || !m.flat);
+    }
+    // Shot from -x, the blood flies towards +x: the wall is not behind it.
+    DamageMarks other;
+    other.bleed(w, Wound{7, 1, 800, 976, 20, 30, true, true});
+    CHECK(count(other, MarkKind::BloodSpray, wall) == 0);
+
+    // Killed by a blast: a pool under the body and a fan of blood.
+    DamageMarks gore;
+    gore.bleed(w, Wound{7, 3, 1060, 976, 0, 80, true, true});
+    CHECK(count(gore, MarkKind::BloodPool, near_tile) == 1);
+    CHECK(count(gore, MarkKind::BloodDrop) + count(gore, MarkKind::BloodSpray) >= 4);
+    // A bullet that kills leaves a pool too; the gore mode, more of all.
+    CHECK(count(marks, MarkKind::BloodPool) == 1);
+    DamageMarks more;
+    more.bleed(w, Wound{7, 1, 1100, 976, 20, 30, true, true}, true);
+    CHECK(count(more, MarkKind::BloodDrop) > count(marks, MarkKind::BloodDrop));
+    CHECK(count(more, MarkKind::BloodSpray, wall) >= 1);
+    DamageMarks torn;
+    torn.bleed(w, Wound{7, 3, 1060, 976, 0, 80, true, true}, true);
+    CHECK(torn.size() > gore.size());
+
+    // Each option forgets its own marks only: a hole on the wall's +x face
+    // goes with the impacts, the blood stays; then the blood goes.
+    marks.record(w, wall, {944, 980, 20}, 1);
+    const int blood = count(marks, MarkKind::BloodSpray) + count(marks, MarkKind::BloodDrop);
+    CHECK(count(marks, MarkKind::Bullet, wall) == 1 && blood > 0);
+    marks.prepare(w, pal, false, true);
+    CHECK(count(marks, MarkKind::Bullet) == 0 &&
+          count(marks, MarkKind::BloodSpray) + count(marks, MarkKind::BloodDrop) == blood);
+    marks.prepare(w, pal, true, false);
+    CHECK(marks.size() == 0);
+}
+
+// Port addition: the casings (casings.hpp).
+void test_casings() {
+    // BA-40 / BA-41 (0xB), RP-22 / RP-32 (1): casings; SG-A1 (2), AC-88 (0xD):
+    // shells; explosives (AR-7 0xA, GL-303 3) and energy weapons: none.
+    CHECK(ejection_of(0xB) == Ejection::Casing && ejection_of(1) == Ejection::Casing);
+    CHECK(ejection_of(2) == Ejection::Shell && ejection_of(0xD) == Ejection::Shell);
+    CHECK(ejection_of(0xA) == Ejection::None && ejection_of(3) == Ejection::None && ejection_of(6) == Ejection::None);
+    // Lying: a casing of two brass pixels, a shell of three (its head
+    // brass), each with a pixel of shadow.
+    for (std::uint32_t seed = 0; seed < 4; ++seed) {
+        const auto casing = mark_pattern(MarkKind::Casing, 1, true, seed);
+        const auto shell = mark_pattern(MarkKind::Shell, 1, true, seed);
+        CHECK(casing.size() == 3 && shell.size() == 4);
+        CHECK(casing[0].shade == DamageMarks::kBrassLight && casing[2].shade == 1);
+        CHECK(shell[1].shade == DamageMarks::kShellRed && shell[2].shade == DamageMarks::kBrass);
+    }
+
+    // A floor of 5 x 5 tiles (shape 8, 64 x 64) over x, y 832..1152; the
+    // shooter (shape 6) at (1000, 1000), another at (3000, 3000) over nothing.
+    std::vector<ShapeInfo> tf = test_typeflags();
+    tf[8].footpad_x = 4;
+    tf[8].footpad_y = 4;
+    World w(tf);
+    const auto place = [&](std::uint16_t shape, std::int32_t x, std::int32_t y, std::int32_t z) {
+        const ObjId id = w.create(shape, 0);
+        w.pop_to_coords(x, y, z);
+        return id;
+    };
+    for (int i = 0; i < 5; ++i)
+        for (int j = 0; j < 5; ++j) place(8, 896 + 64 * i, 896 + 64 * j, 0);
+    const ObjId shooter = place(6, 1000, 1000, 0);
+    const ObjId alone = place(6, 3000, 3000, 0);
+    const auto count = [](const DamageMarks& m, MarkKind kind) {
+        return std::count_if(m.marks().begin(), m.marks().end(), [&](const auto& k) { return k.kind == kind; });
+    };
+
+    // Facing +x (direction 4): out to the right (+y), a little back, up;
+    // then down on the floor, a casing mark.
+    Casings casings;
+    DamageMarks marks;
+    casings.eject(w, shooter, 16, 0, 24, 4, Ejection::Casing, 100);
+    casings.eject(w, shooter, 16, 0, 24, 4, Ejection::None, 100);
+    CHECK(casings.flying().size() == 1);
+    casings.advance(w, 110, marks);
+    CHECK(casings.flying().size() == 1);
+    if (casings.flying().size() == 1) {
+        const Casings::Flying& f = casings.flying().front();
+        CHECK(f.y > 1005 && f.x < 1009.6 && f.z > 24 && f.ground == 0 && f.age == 10);
+    }
+    casings.advance(w, 300, marks);
+    CHECK(casings.flying().empty() && marks.size() == 1 && count(marks, MarkKind::Casing) == 1);
+    if (marks.size() == 1) CHECK(marks.marks().front().flat && w.get(marks.marks().front().host)->shape == 8);
+    // A shell; nothing where there is no floor; nothing when time went back.
+    casings.eject(w, shooter, 16, 0, 24, 4, Ejection::Shell, 300);
+    casings.eject(w, alone, 16, 0, 24, 4, Ejection::Casing, 300);
+    casings.advance(w, 500, marks);
+    CHECK(casings.flying().empty() && count(marks, MarkKind::Shell) == 1 && marks.size() == 2);
+    casings.eject(w, shooter, 16, 0, 24, 4, Ejection::Casing, 600);
+    casings.advance(w, 400, marks);
+    CHECK(casings.flying().empty() && marks.size() == 2);
+
+    // Drawn in flight next to its shooter, in brass; not with another item.
+    Palette pal;
+    for (int c = 0; c < 256; ++c) {
+        const auto v = static_cast<std::uint8_t>(c);
+        pal.colors[c] = {v, v, v};
+    }
+    marks.prepare(w, pal);
+    casings.eject(w, shooter, 16, 0, 24, 4, Ejection::Casing, 700);
+    casings.advance(w, 702, marks);
+    Surface8 screen(64, 64, 200);
+    DrawItem d{};
+    d.item = w.get(alone);
+    d.sx = 32;
+    d.sy = 32;
+    casings.draw(screen, d, marks);
+    const auto changed = [&] {
+        int n = 0;
+        for (int y = 0; y < 64; ++y)
+            for (int x = 0; x < 64; ++x) n += screen.row(y)[x] != 200;
+        return n;
+    };
+    CHECK(changed() == 0);
+    d.item = w.get(shooter);
+    casings.draw(screen, d, marks);
+    CHECK(changed() == 2);
+
+    // At most kMaxCasings on the floor, the oldest go; the other marks stay.
+    marks.record(w, 0, {1000, 1000, 0}, 1);
+    for (std::uint32_t k = 0; k < DamageMarks::kMaxCasings + 20; ++k)
+        marks.lay_casing(w, {960 + static_cast<std::int32_t>(k % 64), 1000, 0}, false, k);
+    CHECK(count(marks, MarkKind::Casing) + count(marks, MarkKind::Shell) ==
+              static_cast<std::ptrdiff_t>(DamageMarks::kMaxCasings) &&
+          count(marks, MarkKind::Bullet) == 1);
+    // Switched off, the casings go, the rest stays.
+    marks.prepare(w, pal, true, true, false);
+    CHECK(count(marks, MarkKind::Casing) + count(marks, MarkKind::Shell) == 0 && count(marks, MarkKind::Bullet) == 1);
+}
+
 int main() {
+    test_impact_marks();
+    test_blood_marks();
+    test_casings();
     test_typeflag_decode();
     test_world_ids();
     test_create_npc_reuses_a_slot();
