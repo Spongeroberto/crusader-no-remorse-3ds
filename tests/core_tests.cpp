@@ -1,6 +1,9 @@
-// Game configuration parsing and writing, data detection (no game data).
+// Game configuration parsing and writing, data detection, Flex files read
+// on request (no game data).
 
 #include "core/data_info.hpp"
+#include "core/flex.hpp"
+#include "core/flex_file.hpp"
 #include "core/game_config.hpp"
 #include "core/iso_image.hpp"
 
@@ -266,8 +269,64 @@ void check_data_info() {
 
 }  // namespace
 
+// FlexFile reads the same bytes as FlexArchive, and read_many merges
+// neighbouring entries into one request unless they are too far apart or the
+// request would grow too large.
+void check_flex_file() {
+    namespace fs = std::filesystem;
+    const fs::path path = fs::temp_directory_path() / "crusader_flex_file_test.flx";
+    std::vector<std::vector<std::uint8_t>> entries(6);
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        if (i == 2) continue;  // left empty
+        entries[i].assign(100 + 10 * i, static_cast<std::uint8_t>(i + 1));
+    }
+    FlexWriter out(entries.size());
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        if (!entries[i].empty()) out.add(i, entries[i]);
+    }
+    out.write(path);
+
+    const FlexArchive whole = FlexArchive::open(path);
+    FlexFile file = FlexFile::open(path);
+    check(file.count() == whole.count() && file.requests() == 2, "flex file: index only on open");
+    bool same = true;
+    for (std::size_t i = 0; i < file.count(); ++i) {
+        const auto a = whole.entry(i);
+        const auto b = file.read(i);
+        same = same && std::vector<std::uint8_t>(a.begin(), a.end()) == b;
+    }
+    check(same, "flex file: read matches FlexArchive");
+    check(file.read(2).empty() && file.read(99).empty() && file.size(99) == 0, "flex file: empty entries");
+    check(file.requests() == 2 + 5, "flex file: empty entries are not read");
+
+    std::vector<std::size_t> got;
+    bool bytes_match = true;
+    auto collect = [&](std::size_t i, std::vector<std::uint8_t> bytes) {
+        got.push_back(i);
+        bytes_match = bytes_match && bytes == entries[i];
+    };
+    const std::size_t wanted[] = {5, 0, 2, 3, 0, 99};
+    const std::size_t before = file.requests();
+    file.read_many(wanted, collect);
+    check(got == std::vector<std::size_t>{0, 3, 5} && bytes_match, "flex file: read_many in file order, once each");
+    check(file.requests() == before + 1, "flex file: neighbours share one request");
+
+    got.clear();
+    const std::size_t apart[] = {0, 3};
+    file.read_many(apart, collect, 0);
+    check(got.size() == 2 && bytes_match && file.requests() == before + 3, "flex file: gaps over max_gap split");
+
+    got.clear();
+    const std::size_t all[] = {0, 1, 3, 4, 5};
+    file.read_many(all, collect, 64 * 1024, 250);
+    // 100 + 110 bytes fit in 250; 130, 140 and 150 each need their own.
+    check(got.size() == 5 && bytes_match && file.requests() == before + 3 + 4, "flex file: max_request splits");
+    fs::remove(path);
+}
+
 int main() {
     check_config();
+    check_flex_file();
     check_iso();
     check_data_info();
     std::printf(failures ? "%d failure(s)\n" : "all checks passed\n", failures);

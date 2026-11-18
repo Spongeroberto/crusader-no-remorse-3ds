@@ -38,6 +38,7 @@ endif()  # NOT CRUSADER_LIBRARIES_ONLY
 # Game data formats, no platform dependency.
 add_library(crusader_core
   src/core/flex.cpp
+  src/core/flex_file.cpp
   src/core/palette.cpp
   src/core/shape.cpp
   src/core/xform.cpp
