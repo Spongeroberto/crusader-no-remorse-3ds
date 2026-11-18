@@ -54,8 +54,9 @@ inline std::int32_t world_from_usecode(std::int32_t v) { return v * 2; }
 // keep_only() drops their shape.
 class ShapeCache {
 public:
-    ShapeCache(const FlexArchive& archive, ShapeLayout layout) : archive_(&archive), layout_(layout) {}
-    ShapeCache(FlexFile& file, ShapeLayout layout) : file_(&file), layout_(layout) {}
+    ShapeCache(const FlexArchive& archive, ShapeLayout layout)
+        : archive_(&archive), layout_(layout), entries_(archive.count()) {}
+    ShapeCache(FlexFile& file, ShapeLayout layout) : file_(&file), layout_(layout), entries_(file.count()) {}
     const Shape* get(std::uint16_t shape);
 
     // From a FlexFile only (no-ops otherwise): reads the shapes not held yet,
@@ -81,7 +82,10 @@ private:
     const FlexArchive* archive_ = nullptr;
     FlexFile* file_ = nullptr;
     ShapeLayout layout_;
-    std::unordered_map<std::uint16_t, Entry> cache_;
+    // By shape number, null until the shape is first asked for. Looked up for
+    // every item drawn and by the game logic, so an array, not a hash map;
+    // each entry on its own so the pointers get() returns stay put.
+    std::vector<std::unique_ptr<Entry>> entries_;
     std::size_t bytes_ = 0;
     std::size_t misses_ = 0;
 };

@@ -2,20 +2,19 @@
 
 #include <algorithm>
 #include <optional>
-#include <unordered_set>
 
 namespace crusader {
 
 // @orig none: shape cache
 const Shape* ShapeCache::get(std::uint16_t shape) {
-    auto it = cache_.find(shape);
-    if (it != cache_.end()) return it->second.shape ? &*it->second.shape : nullptr;
+    if (shape >= entries_.size()) return nullptr;  // an empty entry, as the archive gives
+    if (const Entry* e = entries_[shape].get()) return e->shape ? &*e->shape : nullptr;
     if (file_) {
         ++misses_;
         Entry& e = add(shape, file_->read(shape));
         return e.shape ? &*e.shape : nullptr;
     }
-    Entry& e = cache_[shape];
+    Entry& e = *(entries_[shape] = std::make_unique<Entry>());
     const auto data = archive_->entry(shape);
     if (!data.empty()) {
         try {
@@ -29,7 +28,7 @@ const Shape* ShapeCache::get(std::uint16_t shape) {
 
 // @orig none: shapes read on request
 ShapeCache::Entry& ShapeCache::add(std::uint16_t shape, std::vector<std::uint8_t> bytes) {
-    Entry& e = cache_[shape];
+    Entry& e = *(entries_[shape] = std::make_unique<Entry>());
     bytes_ += bytes.size();
     e.bytes = std::move(bytes);
     if (!e.bytes.empty()) {
@@ -47,31 +46,36 @@ void ShapeCache::load(std::span<const std::uint16_t> shapes) {
     if (!file_) return;
     std::vector<std::size_t> wanted;
     for (std::uint16_t s : shapes) {
-        if (!cache_.contains(s)) wanted.push_back(s);
+        if (s < entries_.size() && !entries_[s]) wanted.push_back(s);
     }
     file_->read_many(wanted, [this](std::size_t s, std::vector<std::uint8_t> bytes) {
         add(static_cast<std::uint16_t>(s), std::move(bytes));
     });
     // Empty entries are not read; remember them so get() does not try again.
-    for (std::size_t s : wanted) cache_.try_emplace(static_cast<std::uint16_t>(s));
+    for (std::size_t s : wanted) {
+        if (!entries_[s]) entries_[s] = std::make_unique<Entry>();
+    }
 }
 
 // @orig none: shapes read on request
 void ShapeCache::keep_only(std::span<const std::uint16_t> shapes) {
     if (!file_) return;
-    const std::unordered_set<std::uint16_t> keep(shapes.begin(), shapes.end());
-    for (auto it = cache_.begin(); it != cache_.end();) {
-        if (keep.contains(it->first)) {
-            ++it;
-        } else {
-            bytes_ -= it->second.bytes.size();
-            it = cache_.erase(it);
+    std::vector<bool> keep(entries_.size());
+    for (std::uint16_t s : shapes) {
+        if (s < keep.size()) keep[s] = true;
+    }
+    for (std::size_t s = 0; s < entries_.size(); ++s) {
+        if (entries_[s] && !keep[s]) {
+            bytes_ -= entries_[s]->bytes.size();
+            entries_[s].reset();
         }
     }
 }
 
 ShapeCache::Stats ShapeCache::stats() const {
-    return {cache_.size(), bytes_, misses_, file_ ? file_->requests() : 0};
+    std::size_t held = 0;
+    for (const auto& e : entries_) held += e != nullptr;
+    return {held, bytes_, misses_, file_ ? file_->requests() : 0};
 }
 
 namespace {
@@ -204,14 +208,27 @@ std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes,
         return a.item->id < b.item->id;
     });
     const std::size_t n = items.size();
-    std::vector<std::vector<std::uint32_t>> before(n);  // before[i]: items to draw before i
+    // The constraints as (item, item to draw before it), in the order found,
+    // then grouped by item in one array (before_start[i] .. before_start[i + 1]
+    // in `before`), each item's list keeping that order, which the DFS below
+    // follows. One array instead of a vector per item: no allocation per item.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> edges;
     for (std::size_t i = 0; i < n; ++i) {
         for (std::size_t j = i + 1; j < n && items[j].left < items[i].right; ++j) {
             if (!screen_overlap(items[i], items[j])) continue;
             const Order order = compare(items[i], items[j]);
-            if (order == Order::kThisFirst) before[j].push_back(static_cast<std::uint32_t>(i));
-            else if (order == Order::kOtherFirst) before[i].push_back(static_cast<std::uint32_t>(j));
+            const auto a = static_cast<std::uint32_t>(i), b = static_cast<std::uint32_t>(j);
+            if (order == Order::kThisFirst) edges.emplace_back(b, a);
+            else if (order == Order::kOtherFirst) edges.emplace_back(a, b);
         }
+    }
+    std::vector<std::uint32_t> before_start(n + 1, 0);
+    for (const auto& e : edges) ++before_start[e.first + 1];
+    for (std::size_t i = 0; i < n; ++i) before_start[i + 1] += before_start[i];
+    std::vector<std::uint32_t> before(edges.size());
+    {
+        std::vector<std::uint32_t> fill(before_start.begin(), before_start.end() - 1);
+        for (const auto& e : edges) before[fill[e.first]++] = e.second;
     }
     std::vector<std::uint8_t> state(n, 0);  // 0 new, 1 visiting, 2 done
     std::vector<DrawItem> ordered;
@@ -237,8 +254,8 @@ std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes,
         state[root] = 1;
         while (!stack.empty()) {
             auto& [node, next] = stack.back();
-            if (next < before[node].size()) {
-                const std::uint32_t dep = before[node][next++];
+            if (next < before_start[node + 1] - before_start[node]) {
+                const std::uint32_t dep = before[before_start[node] + next++];
                 if (state[dep] == 0) {
                     state[dep] = 1;
                     stack.emplace_back(dep, 0);
