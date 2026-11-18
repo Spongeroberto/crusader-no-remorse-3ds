@@ -283,13 +283,16 @@ target_link_libraries(audio_data_tests PRIVATE crusader_engine)
 add_executable(editor_data_tests e2e/editor_data_tests.cpp)
 target_link_libraries(editor_data_tests PRIVATE crusader_editor_core)
 
+add_executable(shape_draw_tests e2e/shape_draw_tests.cpp)
+target_link_libraries(shape_draw_tests PRIVATE crusader_core)
+
 add_executable(game_tests e2e/game_tests.cpp)
 target_link_libraries(game_tests PRIVATE crusader_game crusader_editor_core)
 target_include_directories(game_tests PRIVATE e2e)
 target_compile_definitions(game_tests PRIVATE CRUSADER_TEST_SAVES="${CRUSADER_TEST_SAVES_DIR}")
 
 if(CRUSADER_GAME_DATA_TESTS)
-    foreach(t core_data_tests world_data_tests audio_data_tests editor_data_tests game_tests)
+    foreach(t core_data_tests shape_draw_tests world_data_tests audio_data_tests editor_data_tests game_tests)
         add_test(NAME ${t} COMMAND ${t} ${CRUSADER_DATA_DIR})
     endforeach()
 endif()
