@@ -1769,6 +1769,20 @@ void Game::draw_window(Surface8& screen, int x0, int y0, Draw&& draw) {
     copy_block(window_, 0, 0, screen, x0, y0, kScreenWidth, kScreenHeight);
 }
 
+// The same for drawing that only goes through Surface8::row (the status bar,
+// the cursor, messages, the autosave icon): straight into the screen, without
+// copying 640 x 480 pixels out and back, which cost about 7 ms a call on a
+// classic 3DS. The UI screens and menus keep draw_window.
+template <class Draw>
+void Game::draw_window_in_place(Surface8& screen, int x0, int y0, Draw&& draw) {
+    if (x0 < 0 || y0 < 0 || x0 + kScreenWidth > screen.width || y0 + kScreenHeight > screen.height) {
+        draw_window(screen, x0, y0, std::forward<Draw>(draw));
+        return;
+    }
+    Surface8 window = Surface8::window(screen, x0, y0, kScreenWidth, kScreenHeight);
+    draw(window);
+}
+
 // @orig 1188:19C1
 void Game::render(Surface8& screen, RenderStats* stats) {
     // A screen larger than 640 x 480 (native resolution) shows more of the
@@ -1799,12 +1813,14 @@ void Game::render(Surface8& screen, RenderStats* stats) {
         return;
     }
     render_view(screen, stats);
-    draw_window(screen, ui_x_, ui_y_, [this](Surface8& s) {
+    const auto overlays = [this](Surface8& s) {
         draw_autosave_icon(s);
         if (message_) message_->draw(s);
         if (screen_) screen_->draw(s);
         cursor_.draw(s);
-    });
+    };
+    if (screen_) draw_window(screen, ui_x_, ui_y_, overlays);  // a UI screen may use the pixels directly
+    else draw_window_in_place(screen, ui_x_, ui_y_, overlays);
 }
 
 // @orig 1188:12F1
@@ -1895,8 +1911,8 @@ void Game::render_view(Surface8& screen, RenderStats* stats, bool keep_view) {
         }
     }
     // The status bar is laid out for 640 pixels: centred at the bottom.
-    draw_window(screen, ui_x_, screen.height - kScreenHeight,
-                [this](Surface8& s) { status_bar_.draw(s, *world_); });
+    draw_window_in_place(screen, ui_x_, screen.height - kScreenHeight,
+                         [this](Surface8& s) { status_bar_.draw(s, *world_); });
     // DISPLAY_1190_010f, not in the menu mode (DS:2CEE, set with DS:2D8F).
     if (!sprites_suspended_) pickup_area_.draw(screen, world_->state.pickups);
 }

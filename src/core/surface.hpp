@@ -11,16 +11,43 @@ namespace crusader {
 struct Surface8 {
     int width = 0;
     int height = 0;
-    std::vector<std::uint8_t> pixels;
+    std::vector<std::uint8_t> pixels;  // empty for a window
 
     Surface8() = default;
     Surface8(int w, int h, std::uint8_t fill = 0)
         : width(w), height(h), pixels(static_cast<std::size_t>(w) * h, fill) {}
 
-    std::uint8_t* row(int y) { return pixels.data() + static_cast<std::size_t>(y) * width; }
-    const std::uint8_t* row(int y) const { return pixels.data() + static_cast<std::size_t>(y) * width; }
+    // A w x h rectangle of `s` at (x, y), drawn into in place: its rows are
+    // those of `s`, nothing is copied. It must lie inside `s`, and `s` must
+    // outlive it. Only for code that draws through row() and clear(), not
+    // through `pixels`.
+    static Surface8 window(Surface8& s, int x, int y, int w, int h) {
+        Surface8 v;
+        v.width = w;
+        v.height = h;
+        v.origin_ = s.row(y) + x;
+        v.stride_ = s.stride();
+        return v;
+    }
 
-    void clear(std::uint8_t color) { std::fill(pixels.begin(), pixels.end(), color); }
+    std::uint8_t* row(int y) { return base() + static_cast<std::size_t>(y) * stride(); }
+    const std::uint8_t* row(int y) const {
+        return const_cast<Surface8*>(this)->base() + static_cast<std::size_t>(y) * stride();
+    }
+
+    void clear(std::uint8_t color) {
+        if (!origin_) {
+            std::fill(pixels.begin(), pixels.end(), color);
+            return;
+        }
+        for (int y = 0; y < height; ++y) std::fill_n(row(y), width, color);
+    }
+
+private:
+    std::uint8_t* base() { return origin_ ? origin_ : pixels.data(); }
+    int stride() const { return origin_ ? stride_ : width; }
+    std::uint8_t* origin_ = nullptr;  // a window's top-left pixel in its surface
+    int stride_ = 0;
 };
 
 // One-pixel outline of the rectangle (x0, y0)-(x1, y1), corners included,

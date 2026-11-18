@@ -356,6 +356,8 @@ private:
     void render_view(Surface8& screen, RenderStats* stats = nullptr, bool keep_view = false);
     template <typename Draw>
     void draw_window(Surface8& screen, int x0, int y0, Draw&& draw);
+    template <typename Draw>
+    void draw_window_in_place(Surface8& screen, int x0, int y0, Draw&& draw);
     Surface8 window_;  // 640 x 480 scratch for draw_window
     int ui_x_ = 0, ui_y_ = 0;
     void update_movie(std::uint32_t elapsed_us);
