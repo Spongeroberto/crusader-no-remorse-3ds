@@ -71,7 +71,7 @@ std::string run_bench(const BenchOptions& o) {
     const double t0 = now();
     const auto saves =
         o.saves.empty() ? std::filesystem::temp_directory_path() / "crusader-bench-saves" : o.saves;
-    Game game(o.data, saves);
+    Game game(o.data, saves, {}, o.stream_shapes);
     game.new_game(0);
     const double load_ms = (now() - t0) / 1000.0;
     const long peak_after_load = peak_kb();
@@ -131,6 +131,11 @@ std::string run_bench(const BenchOptions& o) {
     json += summary_json("update", summarize(update_us)) + ",\n";
     json += summary_json("render", summarize(render_us)) + ",\n";
     json += format("  \"peak_memory_kb_after_load\": %ld, \"peak_memory_kb\": %ld,\n", peak_after_load, peak_kb());
+    const auto shapes = game.shape_stats();
+    json += format("  \"stream_shapes\": %s, \"shapes_held\": %zu, \"shape_kb\": %zu, \"shape_misses\": %zu, "
+                   "\"shape_reads\": %zu,\n",
+                   o.stream_shapes ? "true" : "false", shapes.shapes, shapes.bytes / 1024, shapes.misses,
+                   shapes.requests);
     json += format("  \"usecode_faults\": %u\n}\n", static_cast<unsigned>(game.machine().faults().size()));
     return json;
 }

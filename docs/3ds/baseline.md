@@ -146,9 +146,38 @@ blitter is now about 40% of the work on PC, so the rest of the render path
 (`build_display_list`, the screen clear, the shape cache) matters as much as the blitter,
 and drawing a 400×240 view instead of 640×480 is the largest remaining lever.
 
+## Classic 3DS bench, shapes read per map
+
+Measured 2026-11-18, same run as above with `Game`'s `stream_shapes` on: `SHAPES.FLX` is
+no longer read whole; when a map loads, the shapes of its items, its globs and the items
+already in the world are read in merged requests and the others freed. Saves now go to
+`sdmc:/3ds/crusader/SAVEGAME`. On PC the same option keeps every frame identical through
+two map changes (`e2e/shape_stream_tests.cpp`) and lowers peak RSS from 68.4 to 41.3 MiB.
+
+| Measure | Whole file | Per map | |
+| ------- | ---------- | ------- | - |
+| heap after load / peak | 52.5 / 55.3 MiB | 11.8 / 26.9 MiB | 28 MiB freed |
+| shapes held | (all, 40.2 MiB) | 441, 9.7 MiB | |
+| shape file reads / one by one | | 75 / 2 | |
+| load (`Game` construction) | 6.8 s | 3.0 s | |
+| render mean / p95 | 52.6 / 53.0 ms | 53.1 / 54.1 ms | |
+| update mean / max | 7.13 / 94 ms | 7.51 / 187 ms | |
+
+**The engine now uses under half the heap.** About 31 MiB of the 58.5 MiB heap is free
+for audio, movies and the display.
+
+**The map's shapes are read outside `load_ms`.** The first map loads in the first game
+update, before the timed frames, so the 75 reads (about 9.7 MiB) are in neither number.
+From the probe's read model they take about 1.7 s; a loading screen will need to cover
+them at every map change.
+
+**The autosave now succeeds and costs a frame of about 190 ms.** There is no "cannot
+write" message any more, and the slowest update (187 ms) is most likely the autosave
+writing its 255 KiB to the SD card. It will need hiding (a later frame, or a thread).
+
 ## Next measurements
 
 - Where update time goes on the console.
-- Memory with shapes loaded per map.
+- Time to read a map's shapes at a map change.
 - Reads from plain SD card files, for comparison with RomFS.
 - Audio mixing and movie decoding cost; the bench skips both.

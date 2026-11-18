@@ -17,6 +17,7 @@ struct BenchOptions {
     // temporary directory. Ports without one point it somewhere writable.
     std::filesystem::path saves;
     int frames = 1800;
+    bool stream_shapes = false;  // Game's stream_shapes: SHAPES.FLX read per map
     int width = 640, height = 480;
     bool walk = false;  // up arrow held for the whole run
     bool fire = false;  // space tapped every 40 frames

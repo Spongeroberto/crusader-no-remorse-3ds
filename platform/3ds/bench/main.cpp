@@ -61,6 +61,8 @@ int main() {
                                                                      : fs::path(kRoot) / "data";
     // RomFS is read-only: the game saves (the autosave too) on the SD card.
     options.saves = fs::path(kRoot) / "SAVEGAME";
+    // SHAPES.FLX (40 MiB) does not fit beside the rest: read per map.
+    options.stream_shapes = true;
     options.frames = 600;
     options.walk = true;
     options.now_us = tick_us;
