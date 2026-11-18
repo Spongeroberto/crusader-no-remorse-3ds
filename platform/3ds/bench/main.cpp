@@ -1,7 +1,8 @@
 // The engine's benchmark on a 3DS: the same loop as the PC tool
 // (src/tools/bench_run.cpp), headless, with its JSON on the top screen and in
 // sdmc:/3ds/crusader/bench.json. Data comes from romfs:/data when the CIA
-// bundles it, else from sdmc:/3ds/crusader/data.
+// bundles it, else from sdmc:/3ds/crusader/data; saves go to
+// sdmc:/3ds/crusader/SAVEGAME.
 
 #include "tools/bench_run.hpp"
 
@@ -58,6 +59,8 @@ int main() {
     crusader::BenchOptions options;
     options.data = romfs && fs::is_directory("romfs:/data", error) ? fs::path("romfs:/data")
                                                                      : fs::path(kRoot) / "data";
+    // RomFS is read-only: the game saves (the autosave too) on the SD card.
+    options.saves = fs::path(kRoot) / "SAVEGAME";
     options.frames = 600;
     options.walk = true;
     options.now_us = tick_us;

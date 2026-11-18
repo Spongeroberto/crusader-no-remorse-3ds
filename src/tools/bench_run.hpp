@@ -12,6 +12,10 @@ namespace crusader {
 
 struct BenchOptions {
     std::filesystem::path data = "data";
+    // Where the game saves: the run autosaves, which must not replace the
+    // player's own autosave, so the default is a folder in the system's
+    // temporary directory. Ports without one point it somewhere writable.
+    std::filesystem::path saves;
     int frames = 1800;
     int width = 640, height = 480;
     bool walk = false;  // up arrow held for the whole run

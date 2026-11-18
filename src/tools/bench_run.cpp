@@ -69,7 +69,9 @@ std::string run_bench(const BenchOptions& o) {
     const auto peak_kb = o.peak_memory_kb ? o.peak_memory_kb : proc_peak_rss_kb;
 
     const double t0 = now();
-    Game game(o.data);
+    const auto saves =
+        o.saves.empty() ? std::filesystem::temp_directory_path() / "crusader-bench-saves" : o.saves;
+    Game game(o.data, saves);
     game.new_game(0);
     const double load_ms = (now() - t0) / 1000.0;
     const long peak_after_load = peak_kb();
