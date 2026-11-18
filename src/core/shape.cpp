@@ -3,6 +3,7 @@
 #include "core/bytes.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <stdexcept>
 
 namespace crusader {
@@ -132,12 +133,29 @@ bool ShapeFrame::runs_match_width() const {
 }
 
 // @orig ?: asm blitters (1288:00A9 relocatable block), not disassembled
+//
+// Rendering spends most of its time here, so the clipping is worked out once
+// per call instead of per pixel: rows above and below the surface are not
+// decoded, a line stops at the last visible column, and each run is cut to
+// the visible columns before its pixels are copied or filled in one go. Only
+// the bytes a visible run uses are bounds-checked.
+// e2e/shape_draw_tests.cpp checks it pixel for pixel against the plain
+// per-pixel version on every frame of the game data.
 void ShapeFrame::draw(Surface8& dst, int x, int y, bool mirrored, const XformTable* xform) const {
     const int top = y - yoff;
     const int left = mirrored ? x + xoff - (width - 1) : x - xoff;
 
-    for (int ly = 0; ly < height; ++ly) {
-        const int sy = top + ly;
+    // Frame columns [fx0, fx1) and lines [ly0, ly1) that land on the surface.
+    // Mirrored, frame column fx goes to surface column left + width - 1 - fx.
+    const int fx0 = std::max(0, mirrored ? left + width - dst.width : -left);
+    const int fx1 = std::min(width, mirrored ? left + width : dst.width - left);
+    const int ly0 = std::max(0, -top);
+    const int ly1 = std::min(height, dst.height - top);
+    if (fx0 >= fx1 || ly0 >= ly1) return;
+
+    const std::uint8_t* const data = rle.data();
+    for (int ly = ly0; ly < ly1; ++ly) {
+        std::uint8_t* const row = dst.row(top + ly);
         std::size_t p = lines[ly];
         int lx = 0;
         while (lx < width) {
@@ -151,21 +169,51 @@ void ShapeFrame::draw(Surface8& dst, int x, int y, bool mirrored, const XformTab
                 fill = len & 1;
                 len >>= 1;
             }
-            const bool visible_row = sy >= 0 && sy < dst.height;
             // A couple of frames in SHAPES.FLX overshoot the frame width on one
             // line (data quirk); never draw outside the frame.
-            const int drawn = std::min(len, width - lx);
-            for (int k = 0; k < drawn; ++k) {
-                const std::uint8_t c = fill ? read_u8(rle, p) : read_u8(rle, p + k);
-                const int fx = lx + k;
-                const int sx = mirrored ? left + (width - 1 - fx) : left + fx;
-                if (visible_row && sx >= 0 && sx < dst.width) {
-                    std::uint8_t& out = dst.row(sy)[sx];
-                    out = xform ? xform->blend(c, out) : c;
+            const int a = std::max(lx, fx0);
+            const int b = std::min({lx + len, width, fx1});
+            if (a < b) {
+                const int n = b - a;
+                const std::size_t src = fill ? p : p + (a - lx);
+                check_range(rle, src, fill ? 1 : n);
+                const std::uint8_t* in = data + src;
+                if (!mirrored) {
+                    std::uint8_t* out = row + left + a;
+                    if (fill) {
+                        const std::uint8_t c = *in;
+                        if (!xform || !xform->translucent(c)) {
+                            std::memset(out, c, n);
+                        } else {
+                            for (int k = 0; k < n; ++k) out[k] = xform->blend(c, out[k]);
+                        }
+                    } else if (!xform) {
+                        std::memcpy(out, in, n);
+                    } else {
+                        for (int k = 0; k < n; ++k) out[k] = xform->blend(in[k], out[k]);
+                    }
+                } else {
+                    // Walks leftwards on the surface as the frame column grows.
+                    std::uint8_t* out = row + left + width - 1 - a;
+                    if (fill) {
+                        const std::uint8_t c = *in;
+                        if (!xform || !xform->translucent(c)) {
+                            std::memset(out - (n - 1), c, n);
+                        } else {
+                            for (int k = 0; k < n; ++k) out[-k] = xform->blend(c, out[-k]);
+                        }
+                    } else if (!xform) {
+                        for (int k = 0; k < n; ++k) out[-k] = in[k];
+                    } else {
+                        for (int k = 0; k < n; ++k) out[-k] = xform->blend(in[k], out[-k]);
+                    }
                 }
             }
             p += fill ? 1 : len;
             lx += len;
+            if (lx >= fx1) {
+                break;  // the rest of the line is off the surface
+            }
         }
     }
 }
