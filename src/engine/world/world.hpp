@@ -386,6 +386,12 @@ public:
     GameState state;
 
     explicit World(std::vector<ShapeInfo> typeflags = {}) : typeflags_(std::move(typeflags)) { init_free_slots(); }
+    // by_id_ points into items_: a copy would point into the original. A
+    // move hands items_'s elements over without moving them, so it may.
+    World(const World&) = delete;
+    World& operator=(const World&) = delete;
+    World(World&&) = default;
+    World& operator=(World&&) = default;
 
 
     void set_hooks(WorldHooks hooks) { hooks_ = std::move(hooks); }
@@ -737,7 +743,7 @@ public:
     template <class Fn>
     void for_each(Fn&& fn) const {
         for (ObjId id = 1; id < next_id_; ++id) {
-            if (auto it = items_.find(id); it != items_.end()) fn(it->second);
+            if (const Item* item = by_id_[id]) fn(*item);
         }
     }
 
@@ -817,6 +823,11 @@ private:
     std::array<ObjId, kTrackedSlots> tracked_{};
     std::size_t tracked_count_ = 0;
     std::unordered_map<ObjId, Item> items_;
+    // The items by id, pointing into items_ (whose elements never move).
+    // get() and for_each() run for every item many times a frame; on a
+    // console without an L2 cache a hash lookup each time cost about 20 ms
+    // a frame. Kept beside the map so that loops over items_ keep its order.
+    std::vector<Item*> by_id_ = std::vector<Item*>(0x10000, nullptr);
     ObjId next_id_ = 1;
     FreeSlots free_items_, free_npcs_;
     std::bitset<kItemSlots> free_mask_;

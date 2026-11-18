@@ -124,15 +124,9 @@ std::vector<FixedRecord> read_fixed_map(const FlexArchive& fixed, std::size_t ma
     return records;
 }
 
-Item* World::get(ObjId id) {
-    auto it = items_.find(id);
-    return it == items_.end() ? nullptr : &it->second;
-}
+Item* World::get(ObjId id) { return by_id_[id]; }
 
-const Item* World::get(ObjId id) const {
-    auto it = items_.find(id);
-    return it == items_.end() ? nullptr : &it->second;
-}
+const Item* World::get(ObjId id) const { return by_id_[id]; }
 
 // @orig 10B0:262A
 Item& World::add(Item item) {
@@ -154,6 +148,7 @@ Item& World::add(Item item) {
     item.id = id;
     if (id >= next_id_) next_id_ = static_cast<ObjId>(id + 1);
     Item& added = items_.emplace(id, std::move(item)).first->second;
+    by_id_[id] = &added;
     link_to_cell(added);
     return added;
 }
@@ -168,8 +163,10 @@ Item& World::add_with_id(Item item) {
 
     if (const Item* old = get(item.id)) unlink_from_cell(*old);
     items_.erase(item.id);
+    by_id_[item.id] = nullptr;
     const ObjId id = item.id;
     Item& added = items_.emplace(id, std::move(item)).first->second;
+    by_id_[id] = &added;
     link_to_cell(added);
     return added;
 }
@@ -237,6 +234,7 @@ std::size_t World::load_saved_items(const FlexArchive& save) {
     };
 
     items_.clear();
+    std::fill(by_id_.begin(), by_id_.end(), nullptr);
     clear_tracked();
     for (auto& c : cells_) c.clear();
     next_id_ = 1;
@@ -1322,6 +1320,7 @@ void World::destroy(ObjId id) {
         push_free(id);
     }
     items_.erase(id);
+    by_id_[id] = nullptr;
     // Item_forget ends with Kernel_fail_processes(id, any type): the item's
     // processes (its usecode events among them) end with it. Otherwise they
     // went on with the next item given the slot, the head of the free list:
