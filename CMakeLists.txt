@@ -11,6 +11,12 @@ else()
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# Ports to other platforms (platform/3ds) take only the platform-free
+# libraries (core, engine, game) and bring their own front end: no SDL, no
+# executables, no editor, no tests.
+option(CRUSADER_LIBRARIES_ONLY "Build only the platform-free libraries" OFF)
+
+if(NOT CRUSADER_LIBRARIES_ONLY)
 # SDL2: use the system package when available (Linux distros), otherwise build it.
 find_package(SDL2 CONFIG QUIET)
 if(NOT SDL2_FOUND)
@@ -27,6 +33,7 @@ if(TARGET SDL2::SDL2-static)
 else()
   set(SDL2_TARGET SDL2::SDL2)
 endif()
+endif()  # NOT CRUSADER_LIBRARIES_ONLY
 
 # Game data formats, no platform dependency.
 add_library(crusader_core
@@ -121,6 +128,12 @@ add_library(crusader_engine
   src/engine/world/render.cpp)
 target_link_libraries(crusader_engine PUBLIC crusader_core)
 
+if(CRUSADER_LIBRARIES_ONLY)
+  add_library(crusader_game src/game/game.cpp)
+  target_link_libraries(crusader_game PUBLIC crusader_engine)
+  return()
+endif()
+
 # Platform layer (replaces SUPERVGA/VPORT/BASEPAL hardware access).
 add_library(crusader_platform
   src/platform/sdl_presenter.cpp
@@ -163,7 +176,7 @@ target_link_libraries(diffcheck PRIVATE crusader_engine)
 add_executable(useprobe src/tools/useprobe.cpp)
 target_link_libraries(useprobe PRIVATE crusader_game)
 
-add_executable(bench src/tools/bench.cpp)
+add_executable(bench src/tools/bench.cpp src/tools/bench_run.cpp)
 target_link_libraries(bench PRIVATE crusader_game)
 
 add_executable(shapedump src/tools/shapedump.cpp)
