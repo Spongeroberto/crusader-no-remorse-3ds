@@ -165,7 +165,7 @@ ObjId find_target(const World& world, ObjId shooter, int dir, bool sixteen_direc
     };
     const auto distance_to = [&](const Item& item) {
         return static_cast<std::uint32_t>(
-            std::max({std::abs(static_cast<std::int16_t>(from->x - item.x)),
+            std::max<std::int32_t>({std::abs(static_cast<std::int16_t>(from->x - item.x)),
                       std::abs(static_cast<std::int16_t>(from->y - item.y)), std::abs((from->z & 0xFF) - (item.z & 0xFF))}));
     };
     // Port addition: the target the right stick points at on screen

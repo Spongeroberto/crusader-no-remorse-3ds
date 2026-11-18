@@ -461,7 +461,7 @@ void DamageMarks::bleed(const World& world, const Wound& wound, bool gore) {
     if (!npc) return;
     const Box b = box_of(*npc, world.shape_info(npc->shape));
     const World::Point centre{(b.x_left + b.x) / 2, (b.y_far + b.y) / 2, npc->z};
-    const std::int32_t chest = npc->z + std::min((b.z_top - b.z) * 5 / 8, 40);
+    const std::int32_t chest = npc->z + std::min<std::int32_t>((b.z_top - b.z) * 5 / 8, 40);
     // Away from the shooter or the blast; anywhere when it stood right there.
     double ux = centre.x - wound.from_x, uy = centre.y - wound.from_y;
     const double length = std::sqrt(ux * ux + uy * uy);

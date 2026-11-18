@@ -117,7 +117,7 @@ ObjId stick_pick(const World& world, const AnimDat& anims, double screen_deg) {
         const Item* item = t != 0 && t != id ? world.get(t) : nullptr;
         if (!item || (is_npc_id(t) && world.is_dead(t)) || !world.is_partly_in_combat_zone(*item)) continue;
         const int reach =
-            std::max({std::abs(static_cast<std::int16_t>(npc->x - item->x)), std::abs(static_cast<std::int16_t>(npc->y - item->y)),
+            std::max<std::int32_t>({std::abs(static_cast<std::int16_t>(npc->x - item->x)), std::abs(static_cast<std::int16_t>(npc->y - item->y)),
                       std::abs((npc->z & 0xFF) - (item->z & 0xFF))});
         if (reach > 0x400) continue;
         const World::Point a = aim_point(world, id, t);
