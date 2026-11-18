@@ -14,6 +14,7 @@
 #include "core/font.hpp"
 #include "core/xform.hpp"
 #include "core/flex.hpp"
+#include "core/flex_file.hpp"
 #include "core/palette.hpp"
 #include "core/surface.hpp"
 #include "core/trig.hpp"
@@ -44,6 +45,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -68,8 +70,11 @@ public:
     // when empty (the tests use a copy of the original saves). `mod`: a
     // folder made by the level editor; its files replace those of the data
     // (game_file), and its games are saved in mod/SAVEGAME.
+    // `stream_shapes` (port only, for consoles short of memory): SHAPES.FLX
+    // is not read whole; the shapes a map uses are read when it loads and
+    // the others freed (prepare_shapes). The game plays the same either way.
     explicit Game(const std::filesystem::path& data, const std::filesystem::path& saves = {},
-                  const std::filesystem::path& mod = {});
+                  const std::filesystem::path& mod = {}, bool stream_shapes = false);
     Game(const Game&) = delete;
     Game& operator=(const Game&) = delete;
 
@@ -78,6 +83,9 @@ public:
     void load_save(int slot);
     // Same, from any file (the tests keep saves under names telling their bug).
     void load_save_file(const std::filesystem::path& path);
+
+    // The world's shapes: how many are held and how they were read.
+    ShapeCache::Stats shape_stats() const { return shapes_.stats(); }
 
     // Game_save (CRUSYS_1058_0115): writes SAVEGAME/SAVEGAME.<slot> under
     // the name of that slot (save_names(), entry 9). Only the entries the
@@ -295,6 +303,11 @@ private:
     void vibrate(std::uint16_t low_frequency, std::uint16_t high_frequency, std::uint32_t duration_ms,
                  bool preview = false);
     void reset_world();
+    // With streamed shapes: holds the shapes of `map` (its FIXED.DAT items
+    // and the globs they expand to) and of every item in the world now (the
+    // player, NPCs, what they carry), frees the others, and reads the missing
+    // ones in a few large requests. A shape needed later is read on first use.
+    void prepare_shapes(int map);
     // The usecode globals (0x42 bytes in this version), the rest cleared.
     void set_globals(std::span<const std::uint8_t> bytes);
     void on_key(const GameKeyEvent& e);
@@ -343,7 +356,8 @@ private:
 
 
     // Data, kept open for the whole run.
-    FlexArchive shapes_flex_;
+    FlexArchive shapes_flex_;               // empty with streamed shapes
+    std::optional<FlexFile> shapes_file_;   // with streamed shapes
     FlexArchive globs_;
     FlexArchive fixed_;
     std::vector<ShapeInfo> typeflags_;

@@ -2,25 +2,76 @@
 
 #include <algorithm>
 #include <optional>
+#include <unordered_set>
 
 namespace crusader {
 
 // @orig none: shape cache
 const Shape* ShapeCache::get(std::uint16_t shape) {
     auto it = cache_.find(shape);
-    if (it == cache_.end()) {
-        std::optional<Shape> parsed;
-        const auto data = archive_.entry(shape);
-        if (!data.empty()) {
-            try {
-                parsed = Shape::parse(data, layout_);
-            } catch (const std::exception&) {
-                parsed.reset();
-            }
-        }
-        it = cache_.emplace(shape, std::move(parsed)).first;
+    if (it != cache_.end()) return it->second.shape ? &*it->second.shape : nullptr;
+    if (file_) {
+        ++misses_;
+        Entry& e = add(shape, file_->read(shape));
+        return e.shape ? &*e.shape : nullptr;
     }
-    return it->second ? &*it->second : nullptr;
+    Entry& e = cache_[shape];
+    const auto data = archive_->entry(shape);
+    if (!data.empty()) {
+        try {
+            e.shape = Shape::parse(data, layout_);
+        } catch (const std::exception&) {
+            e.shape.reset();
+        }
+    }
+    return e.shape ? &*e.shape : nullptr;
+}
+
+// @orig none: shapes read on request
+ShapeCache::Entry& ShapeCache::add(std::uint16_t shape, std::vector<std::uint8_t> bytes) {
+    Entry& e = cache_[shape];
+    bytes_ += bytes.size();
+    e.bytes = std::move(bytes);
+    if (!e.bytes.empty()) {
+        try {
+            e.shape = Shape::parse(e.bytes, layout_);
+        } catch (const std::exception&) {
+            e.shape.reset();
+        }
+    }
+    return e;
+}
+
+// @orig none: shapes read on request
+void ShapeCache::load(std::span<const std::uint16_t> shapes) {
+    if (!file_) return;
+    std::vector<std::size_t> wanted;
+    for (std::uint16_t s : shapes) {
+        if (!cache_.contains(s)) wanted.push_back(s);
+    }
+    file_->read_many(wanted, [this](std::size_t s, std::vector<std::uint8_t> bytes) {
+        add(static_cast<std::uint16_t>(s), std::move(bytes));
+    });
+    // Empty entries are not read; remember them so get() does not try again.
+    for (std::size_t s : wanted) cache_.try_emplace(static_cast<std::uint16_t>(s));
+}
+
+// @orig none: shapes read on request
+void ShapeCache::keep_only(std::span<const std::uint16_t> shapes) {
+    if (!file_) return;
+    const std::unordered_set<std::uint16_t> keep(shapes.begin(), shapes.end());
+    for (auto it = cache_.begin(); it != cache_.end();) {
+        if (keep.contains(it->first)) {
+            ++it;
+        } else {
+            bytes_ -= it->second.bytes.size();
+            it = cache_.erase(it);
+        }
+    }
+}
+
+ShapeCache::Stats ShapeCache::stats() const {
+    return {cache_.size(), bytes_, misses_, file_ ? file_->requests() : 0};
 }
 
 namespace {

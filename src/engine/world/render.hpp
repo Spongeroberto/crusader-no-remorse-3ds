@@ -15,6 +15,7 @@
 // corner (x + y + 2z). The constraints are then topologically sorted.
 
 #include "core/flex.hpp"
+#include "core/flex_file.hpp"
 #include "core/shape.hpp"
 #include "core/surface.hpp"
 #include "engine/world/world.hpp"
@@ -23,6 +24,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -45,16 +47,43 @@ struct Camera {
 
 inline std::int32_t world_from_usecode(std::int32_t v) { return v * 2; }
 
-// Parses shapes of an archive on first use.
+// Parses shapes of an archive on first use. Built on a FlexFile instead of a
+// FlexArchive, it reads each shape from the file and holds its bytes, so the
+// archive need not be in memory: load() reads many shapes in few requests and
+// keep_only() frees the others. The pointers get() returns stay valid until
+// keep_only() drops their shape.
 class ShapeCache {
 public:
-    ShapeCache(const FlexArchive& archive, ShapeLayout layout) : archive_(archive), layout_(layout) {}
+    ShapeCache(const FlexArchive& archive, ShapeLayout layout) : archive_(&archive), layout_(layout) {}
+    ShapeCache(FlexFile& file, ShapeLayout layout) : file_(&file), layout_(layout) {}
     const Shape* get(std::uint16_t shape);
 
+    // From a FlexFile only (no-ops otherwise): reads the shapes not held yet,
+    // and drops every shape not in `shapes`.
+    void load(std::span<const std::uint16_t> shapes);
+    void keep_only(std::span<const std::uint16_t> shapes);
+
+    struct Stats {
+        std::size_t shapes = 0;        // held now
+        std::size_t bytes = 0;         // their file bytes, from a FlexFile
+        std::size_t misses = 0;        // shapes get() read one by one from a FlexFile
+        std::size_t requests = 0;      // file reads, misses included
+    };
+    Stats stats() const;
+
 private:
-    const FlexArchive& archive_;
+    struct Entry {
+        std::vector<std::uint8_t> bytes;  // from a FlexFile; the shape points into it
+        std::optional<Shape> shape;
+    };
+    Entry& add(std::uint16_t shape, std::vector<std::uint8_t> bytes);
+
+    const FlexArchive* archive_ = nullptr;
+    FlexFile* file_ = nullptr;
     ShapeLayout layout_;
-    std::unordered_map<std::uint16_t, std::optional<Shape>> cache_;
+    std::unordered_map<std::uint16_t, Entry> cache_;
+    std::size_t bytes_ = 0;
+    std::size_t misses_ = 0;
 };
 
 struct DrawItem {

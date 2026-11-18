@@ -41,6 +41,7 @@ void World::load_map(int map) {
         // ITEM_10a8_2a9b: usecode event 4, when the class has one.
         if (hooks_.start_event) hooks_.start_event(id, 4);
     };
+    if (hooks_.map_loading) hooks_.map_loading(map);
     ObjId previous = 0;   // last item read: the container of a deeper record
     ObjId container = 0;
     std::uint16_t depth = 0;

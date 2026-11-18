@@ -190,8 +190,11 @@ std::filesystem::path game_file(const std::filesystem::path& data, const std::fi
 }
 
 // @orig none: loads the data and builds the port's subsystems
-Game::Game(const std::filesystem::path& data, const std::filesystem::path& saves, const std::filesystem::path& mod)
-    : shapes_flex_(FlexArchive::open(game_file(data, mod, "STATIC/SHAPES.FLX"))),
+Game::Game(const std::filesystem::path& data, const std::filesystem::path& saves, const std::filesystem::path& mod,
+           bool stream_shapes)
+    : shapes_flex_(stream_shapes ? FlexArchive{} : FlexArchive::open(game_file(data, mod, "STATIC/SHAPES.FLX"))),
+      shapes_file_(stream_shapes ? std::optional(FlexFile::open(game_file(data, mod, "STATIC/SHAPES.FLX")))
+                                 : std::nullopt),
       globs_(FlexArchive::open(game_file(data, mod, "STATIC/GLOB.FLX"))),
       fixed_(FlexArchive::open(game_file(data, mod, "STATIC/FIXED.DAT"))),
       typeflags_(load_typeflags(game_file(data, mod, "STATIC/TYPEFLAG.DAT"))),
@@ -201,7 +204,7 @@ Game::Game(const std::filesystem::path& data, const std::filesystem::path& saves
       weapon_overlay_(WeaponOverlay::load(data / "STATIC/WPNOVLAY.DAT")),
       palette_(Palette::load(data / "STATIC/GAMEPAL.PAL")),
       usecode_(UsecodeFile::from_flex(FlexArchive::open(game_file(data, mod, "USECODE/EUSECODE.FLX")))),
-      shapes_(shapes_flex_, ShapeLayout::World),
+      shapes_(shapes_file_ ? ShapeCache(*shapes_file_, ShapeLayout::World) : ShapeCache(shapes_flex_, ShapeLayout::World)),
       gumps_flex_(FlexArchive::open(data / "STATIC/GUMPS.FLX")),
       gumps_(gumps_flex_, ShapeLayout::Flat2D),
       fonts_(FontSet::load(data / "STATIC/FONTS.FLX")),
@@ -387,6 +390,7 @@ void Game::reset_world() {
     kernel_->spawn<MouseDaemon>(mouse_queue_);
     kernel_->spawn<DumbTimer>(*world_, anims_);
     WorldHooks hooks = world_->hooks();
+    hooks.map_loading = [this](int map) { prepare_shapes(map); };
     hooks.fire_weapon = [this](ObjId actor, int a, int b, int z, int) { fire_frame(actor, a, b, z); };
     hooks.explosion = [this](int size) {
         static constexpr std::uint16_t kLowFrequency[] = {32000, 50000, 65535};
@@ -492,6 +496,7 @@ void Game::load_save_file(const std::filesystem::path& path) {
     // slots, so Weasel refused the GL-303 clips). The original never leaves
     // one; these are emptied.
     world_->forget_lost_equipment();
+    prepare_shapes(world_->current_map());
     // Entry 60 (FLAG_1410_02e7): the usecode globals, as in UNKDS.DAT.
     set_globals(save.entry(60));
     // Entry 91: Weasel's introduction played (DS:5ECF). Entry 90, the alert
@@ -616,6 +621,27 @@ void Game::save_game(int slot) {
     const auto& dir = save_dir_;
     std::filesystem::create_directories(dir);
     flex.write(dir / ("SAVEGAME." + std::to_string(slot)));
+}
+
+// @orig none: the original reads shapes through its own memory manager
+void Game::prepare_shapes(int map) {
+    if (!shapes_file_) return;
+    std::vector<std::uint16_t> wanted;
+    world_->for_each([&](const Item& item) { wanted.push_back(item.shape); });
+    if (map > 0 && static_cast<std::size_t>(map) < fixed_.count()) {
+        constexpr std::uint8_t kFamilyGlobEgg = 3;
+        for (const FixedRecord& r : read_fixed_map(fixed_, static_cast<std::size_t>(map))) {
+            wanted.push_back(r.shape);
+            const ShapeInfo* info = world_->shape_info(r.shape);
+            if (info && info->family == kFamilyGlobEgg && r.quality != 0) {
+                for (const GlobItem& g : read_glob(globs_, r.quality)) wanted.push_back(g.shape);
+            }
+        }
+    }
+    std::sort(wanted.begin(), wanted.end());
+    wanted.erase(std::unique(wanted.begin(), wanted.end()), wanted.end());
+    shapes_.keep_only(wanted);
+    shapes_.load(wanted);
 }
 
 // @orig none: port-only autosave

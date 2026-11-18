@@ -338,6 +338,9 @@ struct WorldHooks {
     std::function<void(ObjId item)> designated_target_forgotten;
     // Controller_fire_reset then the end of the AutoFirer (1138:2F9F).
     std::function<void()> reset_fire;
+    // Port only: a map is about to be read from FIXED.DAT, after the previous
+    // one was unloaded (lets the shapes it uses be read in advance).
+    std::function<void(int map)> map_loading;
     // ITEM.C 275F: the item is hit by `other` with `force` (contact events
     // of a move, 10E8:123A; see hit_item).
     std::function<void(ObjId item, ObjId other, std::uint16_t force)> got_hit;
