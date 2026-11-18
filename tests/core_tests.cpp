@@ -355,6 +355,18 @@ void check_flex_file() {
     // 100 + 110 bytes fit in 250; 130, 140 and 150 each need their own.
     check(got.size() == 5 && bytes_match && file.requests() == before + 3 + 4, "flex file: max_request splits");
     fs::remove(path);
+
+    // Writing over an existing archive replaces it and leaves no .tmp behind.
+    FlexWriter first(1), second(1);
+    const std::uint8_t one[] = {1}, two[] = {2, 2};
+    first.add(0, one);
+    second.add(0, two);
+    first.write(path);
+    second.write(path);
+    const FlexArchive again = FlexArchive::open(path);
+    check(again.entry(0).size() == 2 && again.entry(0)[0] == 2, "flex writer: a second write replaces the first");
+    check(!fs::exists(fs::path(path) += ".tmp"), "flex writer: no .tmp left");
+    fs::remove(path);
 }
 
 // Language files (port addition): parsing, code page 850, picking a language.

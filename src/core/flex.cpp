@@ -89,7 +89,17 @@ void FlexWriter::write(const std::filesystem::path& path) const {
         out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
         if (!out) throw std::runtime_error("cannot write " + tmp.string());
     }
-    std::filesystem::rename(tmp, path);
+    // Renaming over the old file replaces it in one step, so a crash leaves
+    // either save whole. Some file systems (the 3DS SD card) refuse to rename
+    // onto an existing file: there the old one is removed first.
+    std::error_code error;
+    std::filesystem::rename(tmp, path, error);
+    if (error && std::filesystem::exists(path)) {
+        std::filesystem::remove(path);
+        error.clear();
+        std::filesystem::rename(tmp, path, error);
+    }
+    if (error) throw std::filesystem::filesystem_error("cannot rename", tmp, path, error);
 }
 
 // @orig 1248:02A8
