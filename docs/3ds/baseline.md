@@ -85,9 +85,51 @@ Loading all of `SHAPES.FLX` (40.3 MiB) would take about 5 s, but does not fit in
 The probe also reads from `sdmc:/3ds/crusader/data` when that folder exists; it was
 absent, so SD card files outside the CIA are not measured yet.
 
+## Classic 3DS bench
+
+Measured 2026-11-18 with `platform/3ds/bench`: the same loop as `build/bench`
+(`src/tools/bench_run.cpp`), 600 frames at 640×480 with the player walking, Release build
+(devkitARM GCC 16.1, `-O2`). Installed as a CIA (64 MB system mode) with the game data,
+movies left out, in its RomFS. `__ctru_linear_heap_size` set to 4 MiB, which gave a
+`malloc` heap of 58.5 MiB.
+
+| Measure | Classic 3DS | PC (walk, 640×480) | Ratio |
+| ------- | ----------- | ------------------ | ----- |
+| update mean / p95 | 7.13 ms / 7.49 ms | 31 µs / 42 µs | ~230× |
+| update max | 93.3 ms | | |
+| render mean / p95 | 169.5 ms / 170.0 ms | 1.65 ms / 1.69 ms | ~100× |
+| items drawn | 216 | 217 | |
+| load (new game) | 6.8 s | 45 ms | |
+| heap after load / peak | 52.5 MiB / 55.3 MiB | 58 / 68.4 MiB RSS | |
+| Usecode faults | 0 | 0 | |
+
+**The engine runs correctly on the console, at about 5.6 fps.** A frame takes about
+177 ms, 96% of it rendering. The earlier estimate of 110–180 ms for the blitter held.
+No Usecode faults, and the same number of items is drawn as on PC.
+
+**Rendering must get about 6.5× faster for 30 fps.** At 30 fps a frame has 33 ms; update
+takes 7 ms of it, which leaves 26 ms for rendering, against 170 ms now. 60 fps would
+need rendering under 10 ms (17×) and is not a goal yet. Drawing a 400×240 view instead
+of 640×480 would cut the pixels to under a third.
+
+**Game logic is no longer negligible.** At 7 ms, update is 43% of a 60 fps frame and 21%
+of a 30 fps one. Its ratio to the PC (230×) is worse than rendering's (100×), so it is
+worth profiling once rendering is fixed.
+
+**The memory fits, with 3 MiB to spare.** The peak of 55.3 MiB is below the 58.5 MiB heap,
+because the 4 MiB linear heap freed most of the 64 MiB. The margin is too thin for audio,
+movies and a real display, so loading shapes per map is still needed.
+
+**Saving must go elsewhere.** The game autosaves into `<data>/SAVEGAME`, which is
+read-only in RomFS. The write failed at about frame 60; that frame is the 93 ms update.
+The port needs a save folder on the SD card.
+
+**Loading takes 6.8 s**, mostly reading `SHAPES.FLX` (40.3 MiB) whole, at the 8.65 MiB/s
+measured by the probe.
+
 ## Next measurements
 
-- The PC bench on a classic 3DS, once the engine builds for it.
+- Where update time goes on the console.
 - Memory with shapes loaded per map.
 - Reads from plain SD card files, for comparison with RomFS.
 - Audio mixing and movie decoding cost; the bench skips both.
