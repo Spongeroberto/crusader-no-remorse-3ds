@@ -127,6 +127,25 @@ The port needs a save folder on the SD card.
 **Loading takes 6.8 s**, mostly reading `SHAPES.FLX` (40.3 MiB) whole, at the 8.65 MiB/s
 measured by the probe.
 
+## Classic 3DS bench, faster blitter
+
+Measured 2026-11-18, same build and run as above plus the `ShapeFrame::draw` rewrite
+(clipping once per call, whole runs copied or filled). Its output is pixel-identical to
+the old blitter (`e2e/shape_draw_tests.cpp`, 2.8 million draws).
+
+| Measure | Old blitter | New blitter | |
+| ------- | ----------- | ----------- | - |
+| render mean / p95 | 169.5 ms / 170.0 ms | 52.6 ms / 53.0 ms | 3.2× faster |
+| update mean / p95 | 7.13 ms / 7.49 ms | 7.13 ms / 7.47 ms | |
+| frame (update + render) | 176.7 ms, 5.7 fps | 59.7 ms, 16.8 fps | |
+| peak heap | 55.3 MiB | 55.3 MiB | |
+
+On PC the same change made rendering 4.1× faster; the console gained 3.2×, short of the
+estimated 40 ms. For 30 fps rendering must still get about 2× faster (26 ms). The
+blitter is now about 40% of the work on PC, so the rest of the render path
+(`build_display_list`, the screen clear, the shape cache) matters as much as the blitter,
+and drawing a 400×240 view instead of 640×480 is the largest remaining lever.
+
 ## Next measurements
 
 - Where update time goes on the console.
