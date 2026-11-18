@@ -953,8 +953,14 @@ void Game::update(std::uint32_t elapsed_us) {
         const bool more = pass < kMaxPasses && left >= to_tick + kTickUs;
         const std::uint32_t step = more ? to_tick : left;
         kernel_->advance_time(step);
+        const double t0 = profile_clock_ ? profile_clock_() : 0;
         kernel_->run_slice();
+        const double t1 = profile_clock_ ? profile_clock_() : 0;
         animate_scenery();
+        if (profile_clock_) {
+            profile_.kernel_us += t1 - t0;
+            profile_.scenery_us += profile_clock_() - t1;
+        }
         left -= step;
         if (!more || movie_ || kernel_->slice_interrupted()) break;
     }
@@ -998,6 +1004,14 @@ void Game::animate_scenery() {
 // @orig none: audio clock of the port
 void Game::mix_elapsed(std::uint32_t elapsed_us) {
     if (!audio_ || audio_device_) return;
+    const double t0 = profile_clock_ ? profile_clock_() : 0;
+    struct Lap {
+        Game& game;
+        double t0;
+        ~Lap() {
+            if (game.profile_clock_) game.profile_.audio_us += game.profile_clock_() - t0;
+        }
+    } lap{*this, t0};
     mixed_us_ += elapsed_us;
     const std::uint64_t due = mixed_us_ * AsylumMixer::kMixRate / 1'000'000;
     const std::size_t count = static_cast<std::size_t>(due - mixed_samples_);
@@ -1847,11 +1861,15 @@ void Game::render_view(Surface8& screen, RenderStats* stats, bool keep_view) {
         }
         return;
     }
+    const auto now = [this] { return profile_clock_ ? profile_clock_() : 0.0; };
+    const double t_start = now();
     screen.clear(0);
+    const double t_cleared = now();
     world_->set_view_size(screen.width, screen.height);
     const GameState& s = world_->state;
     const auto list =
         build_display_list(*world_, shapes_, View{s.view_left, s.view_top}, screen.width, screen.height, stats);
+    const double t_listed = now();
     // Port addition: the impact and blood marks and the casings on the
     // floor, over each item just drawn; the casings in flight after their
     // shooter.
@@ -1865,6 +1883,7 @@ void Game::render_view(Surface8& screen, RenderStats* stats, bool keep_view) {
     } else if (damage_marks_.size() != 0) {
         damage_marks_.clear();
     }
+    const double t_prepared = now();
     // DLIST.C 11A0:05xx: right after item 1, in combat (or holstering,
     // last action 0xB), its weapon (WPNOVLAY.DAT), unmirrored, at the item's
     // screen place plus the offsets of the current action, direction, frame.
@@ -1888,6 +1907,7 @@ void Game::render_view(Surface8& screen, RenderStats* stats, bool keep_view) {
         }();
         if (casings) casings_.draw(surface, d, damage_marks_);
     });
+    const double t_drawn = now();
     // SPMGR.C: the screen sprites (aiming mode), over the scene, unless
     // suspended in the menu mode (DS:2D8F).
     for (const ScreenSprite& sprite : world_->state.screen_sprites.all()) {
@@ -1915,6 +1935,13 @@ void Game::render_view(Surface8& screen, RenderStats* stats, bool keep_view) {
                          [this](Surface8& s) { status_bar_.draw(s, *world_); });
     // DISPLAY_1190_010f, not in the menu mode (DS:2CEE, set with DS:2D8F).
     if (!sprites_suspended_) pickup_area_.draw(screen, world_->state.pickups);
+    if (profile_clock_) {
+        profile_.clear_us += t_cleared - t_start;
+        profile_.list_us += t_listed - t_cleared;
+        profile_.prepare_us += t_prepared - t_listed;
+        profile_.draw_us += t_drawn - t_prepared;
+        profile_.overlay_us += now() - t_drawn;
+    }
 }
 
 void Game::move_camera(std::int32_t dx, std::int32_t dy) {

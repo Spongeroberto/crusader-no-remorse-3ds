@@ -90,6 +90,23 @@ public:
     // The world's shapes: how many are held and how they were read.
     ShapeCache::Stats shape_stats() const { return shapes_.stats(); }
 
+    // Port only, for measuring on slow hardware: time spent in the main
+    // phases of update and render, in microseconds, summed over every frame
+    // since the clock was set. Nothing is measured without a clock.
+    struct Profile {
+        double kernel_us = 0;   // processes and usecode (Kernel::run_slice)
+        double scenery_us = 0;  // animate_scenery
+        double audio_us = 0;    // mixing, when no device takes the sound
+        double clear_us = 0;    // render_view: the screen cleared
+        double list_us = 0;     // build_display_list
+        double prepare_us = 0;  // casings and marks prepared
+        double draw_us = 0;     // the display list drawn
+        double overlay_us = 0;  // sprites, selection, status bar, pickups
+    };
+    void set_profile_clock(std::function<double()> clock_us) { profile_clock_ = std::move(clock_us); }
+    const Profile& profile() const { return profile_; }
+    void reset_profile() { profile_ = {}; }
+
     // Game_save (CRUSYS_1058_0115): writes SAVEGAME/SAVEGAME.<slot> under
     // the name of that slot (save_names(), entry 9). Only the entries the
     // port holds are written: 9, 90, 91, the item table and its lists (0,
@@ -372,6 +389,8 @@ private:
     // Data, kept open for the whole run.
     FlexArchive shapes_flex_;               // empty with streamed shapes
     std::optional<FlexFile> shapes_file_;   // with streamed shapes
+    std::function<double()> profile_clock_;
+    Profile profile_;
     FlexArchive globs_;
     FlexArchive fixed_;
     std::vector<ShapeInfo> typeflags_;
