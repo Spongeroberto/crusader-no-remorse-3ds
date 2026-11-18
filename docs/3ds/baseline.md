@@ -175,9 +175,91 @@ them at every map change.
 write" message any more, and the slowest update (187 ms) is most likely the autosave
 writing its 255 KiB to the SD card. It will need hiding (a later frame, or a thread).
 
+## Classic 3DS bench, the 800×480 view
+
+Measured 2026-11-19: the view chosen in `display.md`, 800×480 shown at half size, with
+shapes per map and three changes that cut the display list's work on PC (shape cache as
+an array, one flat dependency array, the item table walked directly). On PC those
+changes lowered render at 800×480 from 497 to 424 µs, all frame hashes unchanged.
+
+| Measure | 640×480 (before) | 800×480 |
+| ------- | ---------------- | ------- |
+| render mean / p95 | 53.1 / 54.1 ms | 65.2 / 65.5 ms |
+| update mean / p95 / max | 7.5 / 7.6 / 187 ms | 7.6 / 8.0 / 151 ms |
+| items drawn | 216 | 260 (of 8371 in the world) |
+| heap peak | 26.9 MiB | 27.0 MiB |
+| Usecode faults | 0 | 0 |
+
+**The larger view costs what its size predicts; the PC savings did not show.** 800×480
+draws 1.2× the items and renders 1.23× slower, so the 15% the display-list changes saved
+on PC is not visible here: on the console the blitter, which is bound by memory, must
+outweigh the display list more than on PC. A breakdown by render phase on the console
+is needed before more optimising.
+
+**The autosave fails when its slot exists.** Saves are written to `SAVEGAME.n.tmp` and
+renamed over `SAVEGAME.n`; the 3DS file system refuses to rename onto an existing file,
+so the second run's autosave failed (the first one, with no file there, succeeded).
+
+The top screen showed the last frame at half size, as the port will look.
+
+## Classic 3DS bench, time by phase
+
+Measured 2026-11-19, the same 800×480 run with `Game`'s profiling clock set (milliseconds
+per frame, averaged over 600 frames; read from a photo of the screen). The autosave now
+succeeds with a slot already on the SD card: no rename error, and the slowest update
+(179 ms) is the save being written.
+
+| Phase | Classic 3DS | PC | Ratio |
+| ----- | ----------- | -- | ----- |
+| update: kernel (processes, usecode) | 0.72 | 0.005 | ~140× |
+| update: scenery animation (`animate_items`) | **5.92** | 0.020 | ~300× |
+| update: audio mixing | ~0.37 | 0.007 | ~50× |
+| render: clear | 0.99 | 0.005 | ~200× |
+| render: display list | **14.76** | 0.134 | ~110× |
+| render: draw | **34.76** | 0.240 | ~145× |
+| render: overlay (sprites, status bar, pickups) | **~7.99** | 0.027 | ~300× |
+| render: outside `render_view` | ~6.8 | ~0.015 | |
+| update / render mean | 7.46 / 65.3 | 0.034 / 0.42 | |
+
+**Walking every item is what the classic 3DS does worst.** Both `animate_items` (scenery,
+every tick) and the display list (every frame) visit all 8371 items of the world through
+a hash map, to act on a few hundred. On PC that is cheap; on the console, with no L2
+cache and slow memory, it costs about 20 ms a frame between them, almost a third of the
+frame.
+
+**The status bar and the cursor cost about 15 ms.** With a screen larger than 640×480,
+`Game::draw_window` copies a 640×480 block out of the screen, draws into it and copies it
+back, and does so twice a frame (status bar, then cursor and messages): about 1.2 MB of
+copying for a few small pictures.
+
+**The blitter is half the frame** (35 ms), the part the half-resolution drawing targets.
+
+## Classic 3DS bench, overlays in place and items indexed by id
+
+Measured 2026-11-19, the same run after two changes, both with every frame hash
+unchanged on PC: the status bar, cursor and messages draw straight into the screen
+(`Surface8::window`) instead of a 640×480 copy out and back, and the world indexes its
+items by id in an array beside its hash map.
+
+| Phase (ms per frame) | Before | After |
+| -------------------- | ------ | ----- |
+| update: kernel / scenery / audio | 0.72 / 5.92 / ~0.37 | 0.64 / 4.00 / 0.37 |
+| render: clear / list / draw | 0.99 / 14.76 / 34.76 | 0.99 / 15.45 / 35.02 |
+| render: overlay | ~7.99 | 1.30 |
+| render: outside `render_view` | ~6.8 | ~0.1 |
+| **update / render mean** | **7.46 / 65.3** | **5.44 / 52.9** |
+
+**A frame now takes about 58 ms, 17 fps at 800×480** (from 73 ms, 14 fps). The copies
+around the overlays are gone (14 ms), and the scenery is 2 ms cheaper.
+
+**The display list did not get faster, and the scenery still costs 4 ms.** Both still
+touch every one of the 8371 items, and the items sit in hash-map nodes scattered through
+memory: each visit is a cache miss, whether it is found through the hash map or the new
+index. The fix is to visit fewer items: the scenery only animates items in the fast area,
+and the display list only draws items near the view.
+
 ## Next measurements
 
-- Where update time goes on the console.
 - Time to read a map's shapes at a map change.
 - Reads from plain SD card files, for comparison with RomFS.
 - Audio mixing and movie decoding cost; the bench skips both.
