@@ -10,6 +10,9 @@
 
 namespace crusader {
 
+struct Surface8;
+struct Palette;
+
 struct BenchOptions {
     std::filesystem::path data = "data";
     // Where the game saves: the run autosaves, which must not replace the
@@ -18,6 +21,12 @@ struct BenchOptions {
     std::filesystem::path saves;
     int frames = 1800;
     bool stream_shapes = false;  // Game's stream_shapes: SHAPES.FLX read per map
+    // A hash of every timed frame (pixels and palette), to check that a
+    // change leaves the pictures untouched. Costs time: not for timing runs.
+    bool hash = false;
+    // A third of the way in, the player is teleported to another map, and back
+    // two thirds of the way: map loading and freed shapes are exercised too.
+    bool map_tour = false;
     int width = 640, height = 480;
     bool walk = false;  // up arrow held for the whole run
     bool fire = false;  // space tapped every 40 frames
@@ -29,6 +38,8 @@ struct BenchOptions {
     std::function<double()> now_us;
     std::function<long()> peak_memory_kb;
     std::function<void(int done, int total)> progress;
+    // Called with the last frame and its palette, to show it.
+    std::function<void(const Surface8& screen, const Palette& palette)> last_frame;
 };
 
 // Runs the benchmark and returns its results as one JSON object. Throws
