@@ -647,8 +647,8 @@ void DamageMarks::draw(Surface8& screen, const DrawItem& d) const {
         for (const MarkPixel& px : *m.pixels) {
             const int x = cx + px.dx, y = cy + px.dy;
             if (x < 0 || y < 0 || x >= screen.width || y >= screen.height || !opaque(d, x, y)) continue;
-            std::uint8_t& p = screen.row(y)[x];
-            p = shade_[px.shade][p];
+            std::uint8_t* p = screen.at(x, y);  // null where a half-resolution screen keeps no pixel
+            if (p) *p = shade_[px.shade][*p];
         }
     }
 }

@@ -778,7 +778,8 @@ void Game::draw_autosave_icon(Surface8& screen) {
     for (int y = 0; y < kFloppyHeight * kFloppyScale; ++y) {
         for (int x = 0; x < kFloppyWidth * kFloppyScale; ++x) {
             const std::uint8_t index = floppy_[static_cast<std::size_t>(y / kFloppyScale * kFloppyWidth + x / kFloppyScale)];
-            if (index != kTransparentIndex) screen.row(y0 + y)[x0 + x] = index;
+            if (index == kTransparentIndex) continue;
+            if (std::uint8_t* p = screen.at(x0 + x, y0 + y)) *p = index;
         }
     }
 }
@@ -1760,9 +1761,20 @@ void Game::dispatch_mouse() {
 namespace {
 
 // Copies a w x h block between two surfaces (both clipped by the caller's choice of sizes).
+// With a half-resolution surface on either side, only the pixels stored on
+// both sides are copied.
 void copy_block(const Surface8& src, int sx, int sy, Surface8& dst, int dx, int dy, int w, int h) {
+    if (!src.half_resolution() && !dst.half_resolution()) {
+        for (int y = 0; y < h; ++y) std::copy_n(src.row(sy + y) + sx, w, dst.row(dy + y) + dx);
+        return;
+    }
+    Surface8& in = const_cast<Surface8&>(src);  // at() is not const; nothing is written to src
     for (int y = 0; y < h; ++y) {
-        std::copy_n(src.row(sy + y) + sx, w, dst.row(dy + y) + dx);
+        for (int x = 0; x < w; ++x) {
+            const std::uint8_t* from = in.at(sx + x, sy + y);
+            std::uint8_t* to = dst.at(dx + x, dy + y);
+            if (from && to) *to = *from;
+        }
     }
 }
 
@@ -1799,6 +1811,18 @@ void Game::draw_window_in_place(Surface8& screen, int x0, int y0, Draw&& draw) {
 
 // @orig 1188:19C1
 void Game::render(Surface8& screen, RenderStats* stats) {
+    // Port: a half-resolution screen (Surface8::half) is drawn into directly
+    // in play. Movies, menus, messages and UI screens, some of which use the
+    // pixels directly, are drawn at full size and every other pixel kept:
+    // slower, but the same picture.
+    if (screen.half_resolution() && (movie_ || modal())) {
+        if (full_screen_.width != screen.width || full_screen_.height != screen.height) {
+            full_screen_ = Surface8(screen.width, screen.height);
+        }
+        render(full_screen_, stats);
+        keep_every_other_pixel(full_screen_, screen);
+        return;
+    }
     // A screen larger than 640 x 480 (native resolution) shows more of the
     // scene around the camera; everything else stays 640 x 480, centred.
     const bool large = screen.width >= kScreenWidth && screen.height >= kScreenHeight &&

@@ -124,9 +124,7 @@ void Casings::draw(Surface8& screen, const DrawItem& d, const DamageMarks& marks
         static constexpr int kTurn[4][2] = {{1, 0}, {1, 1}, {0, 1}, {-1, 1}};
         const auto& t = kTurn[(f.seed + static_cast<std::uint32_t>(f.age / 2)) & 3];
         const auto put = [&](int x, int y, int shade) {
-            if (x < 0 || y < 0 || x >= screen.width || y >= screen.height) return;
-            std::uint8_t& p = screen.row(y)[x];
-            p = marks.shaded(shade, p);
+            if (std::uint8_t* p = screen.at(x, y)) *p = marks.shaded(shade, *p);
         };
         if (f.shell) {
             put(cx, cy, DamageMarks::kShellDark);
