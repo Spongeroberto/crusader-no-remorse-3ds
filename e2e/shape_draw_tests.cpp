@@ -118,9 +118,54 @@ void compare(const ShapeFrame& f, Surface8& a, Surface8& b, Placement pl, bool m
     }
 }
 
+// At half resolution (Surface8::half): draw() must give the full-size
+// reference picture with every other pixel of every other line kept.
+void compare_half(const ShapeFrame& f, Surface8& full, Surface8& half, Placement pl, bool mirrored,
+                  const XformTable* xform, const std::string& where, Totals& t) {
+    const int x = mirrored ? pl.left - f.xoff + f.width - 1 : pl.left + f.xoff;
+    const int y = pl.top + f.yoff;
+    fill_background(full);
+    keep_every_other_pixel(full, half);
+    reference_draw(f, full, x, y, mirrored, xform);
+    f.draw(half, x, y, mirrored, xform);
+    Surface8 expected = Surface8::half(full.width, full.height);
+    keep_every_other_pixel(full, expected);
+    ++t.draws;
+    if (expected.pixels == half.pixels) return;
+    if (t.mismatches++ < 10) {
+        std::size_t i = 0;
+        while (expected.pixels[i] == half.pixels[i]) ++i;
+        const int w = half.stored_width();
+        std::fprintf(stderr, "  %s: %dx%d at (%d,%d) on %dx%d at half resolution%s%s: first difference at (%zu,%zu)\n",
+                     where.c_str(), f.width, f.height, pl.left, pl.top, full.width, full.height,
+                     mirrored ? " mirrored" : "", xform ? " translucent" : "", 2 * (i % w), 2 * (i / w));
+    }
+}
+
 void check_frame(const ShapeFrame& f, const XformTable& xform, const std::string& where, Totals& t) {
     ++t.frames;
     if (f.width == 0 || f.height == 0) return;
+    // Half resolution: even-sized surfaces, every placement also one pixel
+    // right and one down, so that both parities of each edge are drawn.
+    {
+        const int w = (f.width + 9) & ~1, h = (f.height + 9) & ~1;
+        Surface8 full(w, h), half = Surface8::half(w, h);
+        Surface8 small_full(std::max(2, f.width / 2) & ~1, std::max(2, f.height / 2) & ~1);
+        Surface8 small_half = Surface8::half(small_full.width, small_full.height);
+        for (const bool mirrored : {false, true}) {
+            for (const XformTable* x : {static_cast<const XformTable*>(nullptr), &xform}) {
+                for (const Placement pl : placements(f.width, f.height, w, h)) {
+                    for (const Placement shift : {Placement{0, 0}, Placement{1, 0}, Placement{0, 1}}) {
+                        compare_half(f, full, half, {pl.left + shift.left, pl.top + shift.top}, mirrored, x, where,
+                                     t);
+                    }
+                }
+                compare_half(f, small_full, small_half, {-f.width / 4, -f.height / 4}, mirrored, x, where, t);
+                compare_half(f, small_full, small_half, {-f.width / 4 + 1, -f.height / 4 + 1}, mirrored, x, where,
+                             t);
+            }
+        }
+    }
     Surface8 a(f.width + 8, f.height + 8), b(a.width, a.height);
     // Smaller than the frame: clipped on all four sides at once.
     Surface8 sa(std::max(1, f.width / 2), std::max(1, f.height / 2)), sb(sa.width, sa.height);

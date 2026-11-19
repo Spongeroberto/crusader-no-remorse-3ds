@@ -37,6 +37,8 @@ struct ShapeFrame {
 
     // Draws with the anchor at (x, y); transparent runs are skipped. With
     // `xform`, pixels go through the translucency tables (asm_blit_4).
+    // At half resolution (Surface8::half), exactly the pixels a full-size
+    // draw would give at even x and y.
     void draw(Surface8& dst, int x, int y, bool mirrored = false, const XformTable* xform = nullptr) const;
 
     // Colour of the frame pixel at (fx, fy) in frame coordinates, -1 if transparent.
@@ -45,6 +47,9 @@ struct ShapeFrame {
     // True when every line's RLE runs add up exactly to `width`: a frame parsed
     // with the wrong layout decodes without overflow but fails this check.
     bool runs_match_width() const;
+
+private:
+    void draw_half(Surface8& dst, int x, int y, bool mirrored, const XformTable* xform) const;
 };
 
 // Picks the frame layout for an archive by file name (GUMPS.FLX, MOUSE.SHP -> Flat2D).

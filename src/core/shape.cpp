@@ -142,6 +142,10 @@ bool ShapeFrame::runs_match_width() const {
 // e2e/shape_draw_tests.cpp checks it pixel for pixel against the plain
 // per-pixel version on every frame of the game data.
 void ShapeFrame::draw(Surface8& dst, int x, int y, bool mirrored, const XformTable* xform) const {
+    if (dst.half_resolution()) {
+        draw_half(dst, x, y, mirrored, xform);
+        return;
+    }
     const int top = y - yoff;
     const int left = mirrored ? x + xoff - (width - 1) : x - xoff;
 
@@ -206,6 +210,87 @@ void ShapeFrame::draw(Surface8& dst, int x, int y, bool mirrored, const XformTab
                         for (int k = 0; k < n; ++k) out[-k] = in[k];
                     } else {
                         for (int k = 0; k < n; ++k) out[-k] = xform->blend(in[k], out[-k]);
+                    }
+                }
+            }
+            p += fill ? 1 : len;
+            lx += len;
+            if (lx >= fx1) {
+                break;  // the rest of the line is off the surface
+            }
+        }
+    }
+}
+
+// @orig none: drawing at half resolution (Surface8::half)
+//
+// The same frame, the same clipping, but only the pixels at even x and y of
+// the picture, each at (x / 2, y / 2): lines landing on an odd row are not
+// decoded, and each run is cut to its visible columns, then stepped two at a
+// time from its first even column. e2e/shape_draw_tests.cpp checks it against
+// draw() at full resolution with every other pixel kept.
+void ShapeFrame::draw_half(Surface8& dst, int x, int y, bool mirrored, const XformTable* xform) const {
+    const int top = y - yoff;
+    const int left = mirrored ? x + xoff - (width - 1) : x - xoff;
+    const int fx0 = std::max(0, mirrored ? left + width - dst.width : -left);
+    const int fx1 = std::min(width, mirrored ? left + width : dst.width - left);
+    int ly0 = std::max(0, -top);
+    const int ly1 = std::min(height, dst.height - top);
+    if ((top + ly0) & 1) ++ly0;
+    if (fx0 >= fx1 || ly0 >= ly1) return;
+
+    const std::uint8_t* const data = rle.data();
+    for (int ly = ly0; ly < ly1; ly += 2) {
+        std::uint8_t* const row = dst.row((top + ly) / 2);
+        std::size_t p = lines[ly];
+        int lx = 0;
+        while (lx < width) {
+            lx += read_u8(rle, p++);  // transparent run
+            if (lx >= width) {
+                break;
+            }
+            int len = read_u8(rle, p++);
+            bool fill = false;
+            if (compressed) {
+                fill = len & 1;
+                len >>= 1;
+            }
+            // Frame columns [a, b) are visible; the first at an even screen x.
+            int a = std::max(lx, fx0);
+            const int b = std::min({lx + len, width, fx1});
+            a += mirrored ? (left + width - 1 - a) & 1 : (left + a) & 1;
+            if (a < b) {
+                const int n = (b - a + 1) / 2;
+                const std::size_t src = fill ? p : p + (a - lx);
+                check_range(rle, src, fill ? 1 : 2 * (n - 1) + 1);
+                const std::uint8_t* in = data + src;
+                if (!mirrored) {
+                    std::uint8_t* out = row + (left + a) / 2;
+                    if (fill) {
+                        const std::uint8_t c = *in;
+                        if (!xform || !xform->translucent(c)) {
+                            std::memset(out, c, n);
+                        } else {
+                            for (int k = 0; k < n; ++k) out[k] = xform->blend(c, out[k]);
+                        }
+                    } else if (!xform) {
+                        for (int k = 0; k < n; ++k) out[k] = in[2 * k];
+                    } else {
+                        for (int k = 0; k < n; ++k) out[k] = xform->blend(in[2 * k], out[k]);
+                    }
+                } else {
+                    std::uint8_t* out = row + (left + width - 1 - a) / 2;
+                    if (fill) {
+                        const std::uint8_t c = *in;
+                        if (!xform || !xform->translucent(c)) {
+                            std::memset(out - (n - 1), c, n);
+                        } else {
+                            for (int k = 0; k < n; ++k) out[-k] = xform->blend(c, out[-k]);
+                        }
+                    } else if (!xform) {
+                        for (int k = 0; k < n; ++k) out[-k] = in[2 * k];
+                    } else {
+                        for (int k = 0; k < n; ++k) out[-k] = xform->blend(in[2 * k], out[-k]);
                     }
                 }
             }
