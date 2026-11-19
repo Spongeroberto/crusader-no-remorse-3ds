@@ -258,6 +258,35 @@ memory: each visit is a cache miss, whether it is found through the hash map or 
 index. The fix is to visit fewer items: the scenery only animates items in the fast area,
 and the display list only draws items near the view.
 
+## Classic 3DS bench, drawing at half resolution
+
+Measured 2026-11-19: the same 800×480 run drawn straight into a half-resolution screen
+(`Surface8::half`): the blitter decodes only the lines on even rows and writes every
+other pixel, marks, casings and the status bar write only stored pixels. The picture is
+exactly the full one with every other pixel kept (`e2e/shape_draw_tests.cpp`: every
+frame at every placement; `e2e/half_render_tests.cpp`: 1360 frames of two games in
+lockstep). Two builds of it were run: `-O2`, and `-O3` with link-time optimisation.
+
+| Phase (ms per frame) | Full size | Half, `-O2` | Half, `-O3` + LTO |
+| -------------------- | --------- | ----------- | ----------------- |
+| render: clear | 0.99 | 0.25 | 0.25 |
+| render: display list | 15.45 | 15.46 | ~15.6 |
+| render: draw | 35.02 | **17.11** | ~17.05 |
+| render: overlay | 1.30 | 0.58 | ~0.58 |
+| update: kernel / scenery / audio | 0.64 / 4.00 / 0.37 | 0.64 / 4.00 / 0.37 | 0.60 / ~4.0 / ~0.37 |
+| **render / update mean** | **52.9 / 5.4** | **33.5 / 5.4** | **33.6 / 5.5** |
+
+**A frame now takes about 39 ms, 26 fps at 800×480** (from 58 ms, 17 fps). Drawing the
+sprites costs half what it did: writing a quarter of the pixels halves it, the RLE
+decoding of each visible line remains.
+
+**`-O3` and link-time optimisation gain nothing:** both builds are within noise of each
+other. The build stays at `-O2`.
+
+**The display list is now as costly as drawing** (15.5 ms against 17.1), nearly all of it
+visiting the world's 8371 items to draw 260. It is the next target, then the scenery's
+4 ms.
+
 ## Next measurements
 
 - Time to read a map's shapes at a map change.
