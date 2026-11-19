@@ -20,6 +20,24 @@
 set(CRUSADER_3DS_META "${CMAKE_CURRENT_LIST_DIR}/../meta")
 set(CRUSADER_3DS_TOOLS "" CACHE PATH "Folder holding makerom and bannertool")
 
+# The host tools (platform/3ds/tools), built once with the computer's own
+# compiler, not the console's.
+include(ExternalProject)
+macro(crusader_host_tools)
+    if(NOT TARGET crusader_host_tools)
+        set(host_dir "${CMAKE_BINARY_DIR}/host-tools")
+        ExternalProject_Add(crusader_host_tools
+            SOURCE_DIR "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tools"
+            BINARY_DIR "${host_dir}"
+            CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release
+            INSTALL_COMMAND ""
+            BUILD_BYPRODUCTS "${host_dir}/shape_reach"
+            BUILD_ALWAYS OFF
+        )
+    endif()
+    set(CRUSADER_SHAPE_REACH_EXE "${CMAKE_BINARY_DIR}/host-tools/shape_reach")
+endmacro()
+
 function(crusader_add_cia name)
     cmake_parse_arguments(PARSE_ARGV 1 CIA "" "ELF;TITLE;DESCRIPTION;PRODUCT_CODE;UNIQUE_ID;SYSTEM_MODE;DATA" "")
     if(NOT CIA_SYSTEM_MODE)
@@ -54,6 +72,7 @@ function(crusader_add_cia name)
     )
 
     if(CIA_DATA)
+        crusader_host_tools()
         get_filename_component(data "${CIA_DATA}" ABSOLUTE)
         if(NOT EXISTS "${data}/STATIC")
             message(FATAL_ERROR "${name}: no game data in ${data}")
@@ -66,7 +85,11 @@ function(crusader_add_cia name)
             COMMAND "${CMAKE_COMMAND}" -E make_directory "${romfs}/data"
             COMMAND "${CMAKE_COMMAND}" -DSRC=${data} -DDST=${romfs}/data -DEXCLUDE=FLICS
                     -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/stage_data.cmake"
+            # The display list's bound for these shapes (shape_reach.hpp).
+            COMMAND "${CRUSADER_SHAPE_REACH_EXE}" "${romfs}/data/STATIC/SHAPES.FLX"
+                    "${romfs}/data/STATIC/SHAPES.REACH"
             COMMAND "${CMAKE_COMMAND}" -E touch "${dir}/romfs.stamp"
+            DEPENDS crusader_host_tools
             VERBATIM
         )
     else()

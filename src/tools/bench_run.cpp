@@ -128,7 +128,7 @@ std::string run_bench(const BenchOptions& o) {
     std::vector<double> update_us, render_us;
     update_us.reserve(o.frames);
     render_us.reserve(o.frames);
-    std::size_t drawn_total = 0;
+    std::size_t drawn_total = 0, visited_total = 0;
     std::uint64_t frames_hash = 0xCBF29CE484222325ull;
     const int first_map = game.world().current_map();
     const int other_map = first_map == 2 ? 3 : 2;
@@ -145,6 +145,7 @@ std::string run_bench(const BenchOptions& o) {
         update_us.push_back(b - a);
         render_us.push_back(c - b);
         drawn_total += stats.drawn;
+        visited_total += stats.visited;
         if (o.hash) {
             hash_bytes(frames_hash, screen.pixels.data(), screen.pixels.size());
             hash_bytes(frames_hash, &game.palette().colors[0].r, sizeof game.palette().colors);
@@ -165,8 +166,9 @@ std::string run_bench(const BenchOptions& o) {
                    screen.height, o.frames, o.walk ? "true" : "false", o.fire ? "true" : "false");
     json += format("  \"load_ms\": %.1f, \"skip_frames\": %d, \"in_play\": %s, \"menu_open_at_end\": %s,\n", load_ms,
                    skip_frames, in_play ? "true" : "false", game.menu() ? "true" : "false");
-    json += format("  \"items_drawn_mean\": %.1f, \"world_items\": %zu,\n",
-                   o.frames ? static_cast<double>(drawn_total) / o.frames : 0.0, game.world().item_count());
+    json += format("  \"items_drawn_mean\": %.1f, \"items_visited_mean\": %.1f, \"world_items\": %zu,\n",
+                   o.frames ? static_cast<double>(drawn_total) / o.frames : 0.0,
+                   o.frames ? static_cast<double>(visited_total) / o.frames : 0.0, game.world().item_count());
     json += summary_json("update", summarize(update_us)) + ",\n";
     json += summary_json("render", summarize(render_us)) + ",\n";
     json += format("  \"peak_memory_kb_after_load\": %ld, \"peak_memory_kb\": %ld,\n", peak_after_load, peak_kb());
