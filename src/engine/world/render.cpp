@@ -213,31 +213,12 @@ std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes,
         if (d.right <= 0 || d.bottom <= 0 || d.left >= w || d.top >= h) return;
         items.push_back(d);
     };
-    // A frame lies within `reach` of its item's projected place, and an item
-    // in cell (cx, cy) has usecode x in 512 cx .. 512 cx + 511 (world units
-    // twice that), y alike, z in 0..255: a cell whose projected places all
-    // fall more than the reach outside the screen holds nothing to draw.
+    // Only the cells whose items can reach the screen (World::for_each_near_view).
     // Items are collected in any order: they are sorted below by a total
     // order (left, then id).
     const ShapeReach* reach = walk_all ? nullptr : shapes.reach();
     if (reach && world.items_in_grid()) {
-        const int ox = w / 2 - cam_sx, oy = h / 2 - cam_sy;
-        constexpr int kCellWorld = 2 << World::kCellShift;  // a cell's side in world units
-        for (int cx = 0; cx < World::kGridSize; ++cx) {
-            const int x0 = cx * kCellWorld, x1 = x0 + kCellWorld - 2;
-            for (int cy = 0; cy < World::kGridSize; ++cy) {
-                const int y0 = cy * kCellWorld, y1 = y0 + kCellWorld - 2;
-                const int sx_min = project_x(x0, y1) + ox, sx_max = project_x(x1, y0) + ox;
-                const int sy_min = project_y(x0, y0, 0xFF) + oy, sy_max = project_y(x1, y1, 0) + oy;
-                if (sx_max <= -reach->right || sx_min >= w + reach->left || sy_max <= -reach->down ||
-                    sy_min >= h + reach->up) {
-                    continue;
-                }
-                for (ObjId id : world.cell(cx, cy)) {
-                    if (const Item* item = world.get(id)) consider(*item);
-                }
-            }
-        }
+        world.for_each_near_view(view.left, view.top, w, h, *reach, consider);
     } else {
         world.for_each(consider);
     }

@@ -356,6 +356,7 @@ void Game::reset_world() {
     world_->set_fixed(&fixed_);
     world_->set_trig(&trig_);
     world_->set_audio(audio_.get());
+    world_->set_reach_lookup([this] { return shapes_.reach(); });
     world_->set_frame_lookup([this](std::uint16_t shape, std::uint16_t frame) -> std::optional<FrameBox> {
         const Shape* s = shapes_.get(shape);
         if (!s || frame >= s->frames().size()) return std::nullopt;

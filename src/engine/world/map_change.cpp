@@ -138,6 +138,8 @@ void World::teleport(ObjId npc, std::int32_t x, std::int32_t y, std::int32_t z, 
     item->x = x;
     item->y = y;
     item->z = z & 0xFF;
+    // Off the map only NPCs are looked for outside the cells (items_in_grid).
+    if (item->off_map && !is_npc_id(npc)) items_in_grid_ = false;
     item->map_number = static_cast<std::uint8_t>(map);
     clear_tracked();  // TRACKER_1128_0066 + 0000
     if (npc == 1 && state.camera_target == 1) move_camera_to(x, y, z, map);

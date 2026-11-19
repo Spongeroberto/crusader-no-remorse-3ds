@@ -2,6 +2,7 @@
 
 #include "engine/usecode/world_intrinsics.hpp"
 
+#include <algorithm>
 #include <vector>
 
 namespace crusader {
@@ -19,7 +20,7 @@ int block_step(int f, int d) { return (f + 1) % d + f - f % d; }
 // @orig 1198:162B 1198:1398
 void animate_items(World& world, std::uint32_t count, std::uint32_t last, const FrameCount& frames) {
     std::vector<ObjId> due;
-    world.for_each([&](const Item& item) {
+    const auto consider = [&](const Item& item) {
         if (item.parent != 0 || item.sprite_only || (item.flags & (kItemEthereal | kItemContained))) return;
         if (!(item.flags & kItemFastArea)) return;
         const ShapeInfo* info = world.shape_info(item.shape);
@@ -28,7 +29,30 @@ void animate_items(World& world, std::uint32_t count, std::uint32_t last, const 
         if (speed >= 2 && last / speed == count / speed) return;
         if (!world.is_partly_on_screen(item)) return;
         due.push_back(item.id);
-    });
+    };
+    // Only items partly on screen animate. Port: with a reach bound, they are
+    // looked for in the cells near the view and the NPC slots (the only items
+    // off the map), then taken in id order, as walking every item gives,
+    // since the order decides who draws which random number. Without one,
+    // or with a view where the original's 16-bit screen arithmetic could
+    // wrap around (World::is_partly_in), every item is visited.
+    const GameState& s = world.state;
+    const ShapeReach* reach = world.reach();
+    const bool view_in_range = s.view_left >= -0x4000 && s.view_left <= 0x4000 && s.view_top >= -0x4000 &&
+                               s.view_top <= 0x7EFF;
+    if (reach && world.items_in_grid() && view_in_range) {
+        std::vector<ObjId> near;
+        world.for_each_near_view(s.view_left, s.view_top, s.screen_right + 1, s.screen_bottom + 1, *reach,
+                                 [&](const Item& item) { near.push_back(item.id); });
+        for (ObjId id = 1; id <= 0xFF; ++id) near.push_back(id);
+        std::sort(near.begin(), near.end());
+        near.erase(std::unique(near.begin(), near.end()), near.end());
+        for (ObjId id : near) {
+            if (const Item* item = world.get(id)) consider(*item);
+        }
+    } else {
+        world.for_each(consider);
+    }
     for (ObjId id : due) {
         Item* item = world.get(id);
         if (!item) continue;

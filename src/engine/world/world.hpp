@@ -12,6 +12,7 @@
 // ~0.7% of the original records reference shapes or frames that do not exist;
 // they are loaded as-is (the original engine skips what it cannot create).
 
+#include "core/shape_reach.hpp"
 #include "core/flex.hpp"
 #include "core/palette.hpp"
 #include "core/random.hpp"
@@ -553,10 +554,41 @@ public:
     // Items of a cell in chain order (empty outside the grid).
     std::span<const ObjId> cell(int cx, int cy) const;
     // Port only: true while every item put on the map lay inside the grid
-    // (x and y 0..32767, the cells') at a height of 0..255, so that the
-    // display list can find what is on screen through the cells around it.
-    // Once false it stays so until the map is unloaded or the world cleared.
+    // (x and y 0..32767, the cells') at a height of 0..255, and every item
+    // taken off the map was an NPC, so that what is on screen can be found
+    // through the cells around it (and the NPC slots). Once false it stays
+    // so until the map is unloaded or the world cleared.
     bool items_in_grid() const { return items_in_grid_; }
+
+    // Port only: the bound on how far shapes reach from their anchor
+    // (ShapeReach), from the game's shape cache; null when there is none.
+    void set_reach_lookup(std::function<const ShapeReach*()> lookup) { reach_lookup_ = std::move(lookup); }
+    const ShapeReach* reach() const { return reach_lookup_ ? reach_lookup_() : nullptr; }
+
+    // Calls fn for every item linked to a map cell whose items can show on a
+    // w x h screen at (view_left, view_top): the cell's projected places, at
+    // heights 0..255, within `reach` of the screen. Every item on the map
+    // whose frame overlaps the screen is among them while items_in_grid().
+    template <class Fn>
+    void for_each_near_view(int view_left, int view_top, int w, int h, const ShapeReach& reach, Fn&& fn) const {
+        constexpr int kCellUsecode = 1 << kCellShift;
+        for (int cx = 0; cx < kGridSize; ++cx) {
+            const int x0 = cx * kCellUsecode, x1 = x0 + kCellUsecode - 1;
+            for (int cy = 0; cy < kGridSize; ++cy) {
+                const int y0 = cy * kCellUsecode, y1 = y0 + kCellUsecode - 1;
+                // Screen place of an item: ((x - y) >> 1, ((x + y) >> 2) - z).
+                const int sx_min = ((x0 - y1) >> 1) - view_left, sx_max = ((x1 - y0) >> 1) - view_left;
+                const int sy_min = ((x0 + y0) >> 2) - 0xFF - view_top, sy_max = ((x1 + y1) >> 2) - view_top;
+                if (sx_max <= -reach.right || sx_min >= w + reach.left || sy_max <= -reach.down ||
+                    sy_min >= h + reach.up) {
+                    continue;
+                }
+                for (ObjId id : cells_[static_cast<std::size_t>(cx * kGridSize + cy)]) {
+                    if (const Item* item = by_id_[id]) fn(*item);
+                }
+            }
+        }
+    }
     // True if every item standing on the map is in its cell exactly once.
     bool cells_consistent() const;
 
@@ -795,6 +827,7 @@ private:
     WorldHooks hooks_;
     Audio* audio_ = nullptr;
     FrameLookup frame_lookup_;
+    std::function<const ShapeReach*()> reach_lookup_;
     std::vector<std::uint8_t> npcs_ = std::vector<std::uint8_t>(kNpcSlots * kNpcRecordSize);
     const FlexArchive* globs_ = nullptr;
     const FlexArchive* fixed_ = nullptr;

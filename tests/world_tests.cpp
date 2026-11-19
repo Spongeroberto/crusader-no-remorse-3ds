@@ -14,6 +14,7 @@
 #include "engine/world/collision.hpp"
 #include "engine/world/damage_marks.hpp"
 #include "engine/world/gravity.hpp"
+#include "engine/world/item_anim.hpp"
 #include "engine/world/pathfind.hpp"
 #include "engine/world/render.hpp"
 #include "engine/world/world.hpp"
@@ -50,6 +51,71 @@ void test_typeflag_decode() {
     CHECK(s.footpad_x == 3 && s.footpad_y == 4 && s.footpad_z == 4);
     CHECK(s.is(ShapeInfo::kNpc));
     CHECK(s.weight == 7 && s.volume == 9);
+}
+
+// The scenery animation looks for the items partly on screen in the cells
+// near the view and the NPC slots when it has a reach bound, and takes them
+// in id order: it must animate the same items in the same order, drawing the
+// same random numbers, as walking every item. Several items that draw random
+// numbers animate in the same pass here, some at the screen's edges, some far
+// off, and an NPC off the map lies on screen.
+void test_scenery_near_view() {
+    std::vector<ShapeInfo> types(20);
+    types[10].anim_type = 2;                               // a random frame, on a 1-in-2 draw
+    types[11].anim_type = 4, types[11].anim_data = 1;      // leaves frame 0 on a 1-in-3 draw
+    types[12].anim_type = 1, types[12].anim_data = 1;      // next frame on a 1-in-2 draw
+    types[13].anim_type = 2;                               // an NPC's shape, random too
+    const ShapeReach reach{19, 11, 15, 5};                 // covers the frame box below
+    auto make = [&](bool near) {
+        auto w = std::make_unique<World>(types);
+        w->set_frame_lookup([](std::uint16_t, std::uint16_t) -> std::optional<FrameBox> {
+            return FrameBox{20, 20, 10, 15};
+        });
+        if (near) w->set_reach_lookup([reach] { return &reach; });
+        w->state.view_left = -320;
+        w->state.view_top = 3200;
+        for (int i = 0; i < 400; ++i) {
+            Item item;
+            item.shape = static_cast<std::uint16_t>(10 + i % 3);
+            item.frame = static_cast<std::uint16_t>(i % 5);
+            item.x = 6000 + 37 * (i % 40) + 3 * (i / 40);  // spread around and beyond the view
+            item.y = 6500 + 41 * (i / 40) + 5 * (i % 7);
+            item.z = (i * 13) % 200;
+            item.flags = kItemFastArea;
+            w->add(std::move(item));
+        }
+        Item npc;
+        npc.id = 5;
+        npc.shape = 13;
+        npc.x = 7400;  // screen (420, 450)
+        npc.y = 7200;
+        npc.flags = kItemFastArea;
+        npc.off_map = true;  // in no cell, yet on screen by its place
+        w->add_with_id(std::move(npc));
+        return w;
+    };
+    auto near = make(true), all = make(false);
+    CHECK(near->reach() && !all->reach() && near->items_in_grid());
+    const FrameCount frames = [](std::uint16_t) { return 6; };
+    bool same = true;
+    int animated = 0;
+    for (std::uint32_t pass = 1; pass <= 60; ++pass) {
+        animate_items(*near, pass, pass - 1, frames);
+        animate_items(*all, pass, pass - 1, frames);
+        same = same && near->state.random_state == all->state.random_state;
+        for (ObjId id = 1; id < kItemSlots; ++id) {
+            const Item* a = near->get(id);
+            const Item* b = all->get(id);
+            if (!a || !b) continue;
+            same = same && a->frame == b->frame;
+        }
+    }
+    for (ObjId id = 1; id < kItemSlots; ++id) {
+        if (const Item* a = near->get(id)) animated += a->frame != (id == 5 ? 0 : (id - kFirstItemId) % 5);
+    }
+    CHECK(same);
+    CHECK(animated > 20);                               // many items did animate
+    CHECK(near->get(5)->frame != 0 || all->get(5)->frame != 0);  // and the NPC off the map
 }
 
 void test_world_ids() {
@@ -1523,6 +1589,7 @@ int main() {
     test_casings();
     test_typeflag_decode();
     test_world_ids();
+    test_scenery_near_view();
     test_create_npc_reuses_a_slot();
     test_created_npc_teleport();
     test_item_intrinsics();

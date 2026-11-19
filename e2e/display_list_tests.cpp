@@ -4,7 +4,8 @@
 // to another map, and every frame both lists are built, at 800 x 480 and at
 // 640 x 480, and compared item by item. Also checks the guards: a bound that
 // a loaded shape exceeds is withdrawn, and a reach file made for another
-// archive is refused. Needs the original data (data/, not in the repository)
+// archive is refused. The scenery animation, which finds the items on screen
+// the same way, is checked against walking every item. Needs the original data (data/, not in the repository)
 // but no saved games: runs locally only.
 // Usage: display_list_tests <data_dir>   (skips with exit code 0 when data is absent)
 
@@ -162,6 +163,52 @@ void play(const std::filesystem::path& data) {
     check(t.near_frames > t.frames / 2, "most lists come from the cells near the view");
 }
 
+// The scenery animation, which only animates items partly on screen, finds
+// them through the cells near the view and the NPC slots: two games with the
+// same input, one of them without a reach bound (so it visits every item),
+// must draw the same frames and draw the same random numbers.
+void scenery(const std::filesystem::path& data) {
+    Game near_game(data, std::filesystem::temp_directory_path() / "crusader-scenery-near");
+    Game all_game(data, std::filesystem::temp_directory_path() / "crusader-scenery-all");
+    auto both = [&](auto&& fn) {
+        fn(near_game);
+        fn(all_game);
+    };
+    both([](Game& g) { g.new_game(0); });
+    all_game.world().set_reach_lookup([] { return static_cast<const ShapeReach*>(nullptr); });
+    Surface8 a(800, 480), b(800, 480);
+    int frames = 0, differing = 0;
+    auto step = [&] {
+        both([](Game& g) { g.update(kFrameUs); });
+        near_game.render(a);
+        all_game.render(b);
+        ++frames;
+        if ((a.pixels != b.pixels ||
+             near_game.world().state.random_state != all_game.world().state.random_state) &&
+            differing++ < 5) {
+            std::fprintf(stderr, "  scenery: frame %d differs\n", frames);
+        }
+    };
+    for (int i = 0; i < 3600 && !(near_game.mouse_in_play() && near_game.world().current_map() > 0); ++i) {
+        if (i % 30 == 15) both([](Game& g) { g.key(0x01, false, true, 0, 0x1B); });
+        if (i % 30 == 16) both([](Game& g) { g.key(0x01, false, false, 0); });
+        step();
+    }
+    check(near_game.world().reach() != nullptr && all_game.world().reach() == nullptr,
+          "one game has a reach bound, the other none");
+    both([](Game& g) { g.key(0x48, true, true, 0); });
+    for (int i = 0; i < 600; ++i) step();
+    const int first_map = near_game.world().current_map();
+    for (const int map : {first_map == 2 ? 3 : 2, first_map}) {
+        const auto at = landing(data, map);
+        if (!at) break;
+        both([&](Game& g) { g.world().teleport(1, at->x, at->y, at->z, map); });
+        for (int i = 0; i < 300; ++i) step();
+    }
+    std::printf("scenery: %d frames, differing %d\n", frames, differing);
+    check(differing == 0, "scenery from the cells near the view animates as from every item");
+}
+
 void guards(const std::filesystem::path& data) {
     const auto shapes_flx = data / "STATIC/SHAPES.FLX";
     const auto size = std::filesystem::file_size(shapes_flx);
@@ -191,6 +238,7 @@ int main(int argc, char** argv) {
     }
     try {
         play(data);
+        scenery(data);
         guards(data);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "FAIL: %s\n", e.what());
