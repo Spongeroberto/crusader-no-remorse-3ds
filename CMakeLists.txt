@@ -39,6 +39,7 @@ endif()  # NOT CRUSADER_LIBRARIES_ONLY
 add_library(crusader_core
   src/core/flex.cpp
   src/core/flex_file.cpp
+  src/core/shape_reach.cpp
   src/core/palette.cpp
   src/core/shape.cpp
   src/core/xform.cpp
@@ -192,6 +193,9 @@ target_link_libraries(bench PRIVATE crusader_game)
 
 add_executable(shapedump src/tools/shapedump.cpp)
 target_link_libraries(shapedump PRIVATE crusader_core)
+
+add_executable(shape_reach src/tools/shape_reach.cpp)
+target_link_libraries(shape_reach PRIVATE crusader_core)
 
 # Level editor: the model (FIXED.DAT, GLOB.FLX, egg parameters), testable
 # without a window, and the editor itself (Dear ImGui over SDL2).

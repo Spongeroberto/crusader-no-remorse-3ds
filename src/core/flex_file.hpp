@@ -17,6 +17,7 @@ public:
     static FlexFile open(const std::filesystem::path& path);
 
     std::size_t count() const { return index_.size(); }
+    std::uint64_t file_size() const { return file_size_; }
     std::uint32_t size(std::size_t i) const { return i < index_.size() ? index_[i].size : 0; }
 
     // One entry, empty when it is empty or out of range.
@@ -45,6 +46,7 @@ private:
     std::ifstream in_;
     std::vector<Slot> index_;
     std::size_t requests_ = 0;
+    std::uint64_t file_size_ = 0;
 };
 
 }  // namespace crusader

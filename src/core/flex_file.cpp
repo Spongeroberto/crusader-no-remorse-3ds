@@ -19,6 +19,7 @@ FlexFile FlexFile::open(const std::filesystem::path& path) {
     if (!f.in_) throw std::runtime_error("cannot open " + path.string());
     f.in_.seekg(0, std::ios::end);
     const auto file_size = static_cast<std::uint64_t>(f.in_.tellg());
+    f.file_size_ = file_size;
     if (file_size < kIndexOffset) throw std::runtime_error(path.string() + ": too small for a Flex archive");
 
     std::vector<std::uint8_t> header(kIndexOffset);
