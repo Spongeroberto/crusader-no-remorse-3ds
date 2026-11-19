@@ -308,6 +308,26 @@ at 640×480, 5.7 fps) that is six times faster, showing more of the world.
 What is left, by size: drawing (16.6 ms), the display list's sorting and overlap tests
 (about 6 ms), the scenery animation (4.0 ms, still visiting every item).
 
+## Classic 3DS bench, scenery from the cells near the view
+
+Measured 2026-11-19: the scenery animation finds the items partly on screen through the
+same cells as the display list, plus the NPC slots, then animates them in id order as
+before (`e2e/display_list_tests.cpp`: 1216 frames of two games in lockstep, random draws
+included; `tests/world_tests.cpp`: a hand-built world where many random animations run
+in the same pass and an NPC off the map lies on screen).
+
+| Measure (ms per frame) | Every item | Near cells |
+| ---------------------- | ---------- | ---------- |
+| update: scenery | 4.00 | **1.49** |
+| update: kernel / audio | 0.64 / 0.37 | 0.63 / 0.36 |
+| **update mean / p95** | **5.44 / 5.42** | **2.91 / 2.93** |
+| render mean / p95 | 24.2 / 24.4 | 24.2 / 24.4 |
+
+**A frame now takes about 27 ms, 37 fps at 800×480**, with about 6 ms to spare at 30 fps.
+
+The scenery's 1.5 ms left is mostly the scan of all 4096 cells and the 255 NPC slots on
+every pass; computing the range of cells near the view directly would cut it further.
+
 ## Next measurements
 
 - Time to read a map's shapes at a map change.
