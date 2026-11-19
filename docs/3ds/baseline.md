@@ -287,6 +287,27 @@ other. The build stays at `-O2`.
 visiting the world's 8371 items to draw 260. It is the next target, then the scenery's
 4 ms.
 
+## Classic 3DS bench, display list from the cells near the view
+
+Measured 2026-11-19: the half-resolution run with the display list visiting only the map
+cells whose items can reach the view, using the reach bound computed when the CIA is
+built (`shape_reach`, `STATIC/SHAPES.REACH`). The lists are the same as from every item
+(`e2e/display_list_tests.cpp`: 2200 lists during play, 4848 views swept over two maps).
+
+| Measure | Every item | Near cells |
+| ------- | ---------- | ---------- |
+| items visited per frame | 8371 | 799 |
+| render: display list | 15.46 ms | **6.64 ms** |
+| render: draw | 17.11 ms | 16.62 ms |
+| **render / update mean** | **33.5 / 5.4 ms** | **24.2 / 5.4 ms** |
+
+**A frame now takes about 29.6 ms: 33 fps at 800×480**, inside the 33.3 ms of 30 fps,
+with little to spare (render p95 24.4 ms). From the first console run (176.7 ms a frame
+at 640×480, 5.7 fps) that is six times faster, showing more of the world.
+
+What is left, by size: drawing (16.6 ms), the display list's sorting and overlap tests
+(about 6 ms), the scenery animation (4.0 ms, still visiting every item).
+
 ## Next measurements
 
 - Time to read a map's shapes at a map change.
