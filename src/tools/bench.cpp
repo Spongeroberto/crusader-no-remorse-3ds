@@ -4,7 +4,7 @@
 // to slower hardware: the same loop (bench_run.cpp) runs on the console, so
 // the numbers compare directly.
 //
-// Usage: bench [data_dir] [--frames N] [--size WxH] [--walk] [--fire] [--stream-shapes] [--hash] [--map-tour]
+// Usage: bench [data_dir] [--frames N] [--size WxH] [--walk] [--fire] [--stream-shapes] [--half] [--hash] [--map-tour]
 //              [--png FILE]
 // Prints one JSON object on stdout.
 
@@ -25,6 +25,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--fire") == 0) options.fire = true;
         else if (std::strcmp(argv[i], "--stream-shapes") == 0) options.stream_shapes = true;
         else if (std::strcmp(argv[i], "--hash") == 0) options.hash = true;
+        else if (std::strcmp(argv[i], "--half") == 0) options.half = true;
         else if (std::strcmp(argv[i], "--map-tour") == 0) options.map_tour = true;
         else if (std::strcmp(argv[i], "--png") == 0 && i + 1 < argc) options.png = argv[++i];
         else options.data = argv[i];

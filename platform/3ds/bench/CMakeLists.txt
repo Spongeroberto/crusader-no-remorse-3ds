@@ -20,6 +20,9 @@ add_subdirectory("${repo}" engine)
 
 include(../cmake/cia.cmake)
 set(CRUSADER_PERSONAL_DATA "" CACHE PATH "Game data to bundle in a personal CIA (never share it)")
+# A second build of the bench (other compiler settings, say) installs beside
+# the first under its own title: "Crusader bench + data <variant>".
+set(CRUSADER_BENCH_VARIANT "" CACHE STRING "Suffix for the bench's title; also gives it its own title id")
 
 add_executable(crusader-bench main.cpp "${repo}/src/tools/bench_run.cpp")
 target_link_libraries(crusader-bench PRIVATE crusader_game)
@@ -33,13 +36,21 @@ ctr_generate_smdh(crusader-bench.smdh
 )
 ctr_create_3dsx(crusader-bench SMDH crusader-bench.smdh)
 
+if(CRUSADER_BENCH_VARIANT)
+    set(bench_suffix " ${CRUSADER_BENCH_VARIANT}")
+    set(bench_unique_id 0xC7A53)
+else()
+    set(bench_suffix "")
+    set(bench_unique_id 0xC7A52)
+endif()
+
 if(CRUSADER_PERSONAL_DATA)
     crusader_add_cia(crusader-bench-data
         ELF crusader-bench
-        TITLE "Crusader bench + data"
+        TITLE "Crusader bench + data${bench_suffix}"
         DESCRIPTION "Engine frame time, game data inside"
         PRODUCT_CODE CTR-H-CNRB
-        UNIQUE_ID 0xC7A52
+        UNIQUE_ID ${bench_unique_id}
         DATA "${CRUSADER_PERSONAL_DATA}"
     )
 endif()

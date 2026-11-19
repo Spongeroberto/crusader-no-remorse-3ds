@@ -50,9 +50,11 @@ void show_half_size(const crusader::Surface8& screen, const crusader::Palette& p
     const int w = std::min<int>(fb_w, screen.width / 2), h = std::min<int>(fb_h, screen.height / 2);
     const int x0 = (fb_w - w) / 2, y0 = (fb_h - h) / 2;
     for (int y = 0; y < h; ++y) {
-        const std::uint8_t* row = screen.row(2 * y);
+        // A half-resolution screen stores just these pixels; a full one is halved here.
+        const int step = screen.half_resolution() ? 1 : 2;
+        const std::uint8_t* row = screen.row(step * y);
         for (int x = 0; x < w; ++x) {
-            const crusader::Rgb c = palette.colors[row[2 * x]];
+            const crusader::Rgb c = palette.colors[row[step * x]];
             u8* p = fb + 3 * ((x0 + x) * fb_h + (fb_h - 1 - (y0 + y)));
             p[0] = c.b;
             p[1] = c.g;
@@ -99,6 +101,7 @@ int main() {
     options.width = 800;
     options.height = 480;
     options.last_frame = show_half_size;
+    options.half = true;
     options.walk = true;
     options.now_us = tick_us;
     options.peak_memory_kb = heap_peak_kb;

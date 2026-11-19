@@ -21,6 +21,10 @@ struct BenchOptions {
     std::filesystem::path saves;
     int frames = 1800;
     bool stream_shapes = false;  // Game's stream_shapes: SHAPES.FLX read per map
+    // Drawn straight at half resolution (Surface8::half): the picture is
+    // the full one with every other pixel kept, for a screen a quarter of
+    // the size.
+    bool half = false;
     // A hash of every timed frame (pixels and palette), to check that a
     // change leaves the pictures untouched. Costs time: not for timing runs.
     bool hash = false;

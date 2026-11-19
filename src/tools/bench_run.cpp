@@ -96,7 +96,7 @@ std::string run_bench(const BenchOptions& o) {
     const double load_ms = (now() - t0) / 1000.0;
     const long peak_after_load = peak_kb();
 
-    Surface8 screen(o.width, o.height);
+    Surface8 screen = o.half ? Surface8::half(o.width, o.height) : Surface8(o.width, o.height);
     // The map loads and the briefing movie starts only once the kernel runs,
     // so play begins when the world is drawn with no movie or screen up.
     // Escape skips what comes before: the movie player polls whether the key
@@ -152,9 +152,15 @@ std::string run_bench(const BenchOptions& o) {
         if (o.progress && (i + 1) % 60 == 0) o.progress(i + 1, o.frames);
     }
 
-    if (!o.png.empty()) write_png(o.png, screen, game.palette());
+    if (!o.png.empty()) {
+        // At half resolution, the stored pixels: the picture at half size.
+        Surface8 stored(screen.stored_width(), screen.stored_height());
+        stored.pixels = screen.pixels;
+        write_png(o.png, stored, game.palette());
+    }
     if (o.last_frame) o.last_frame(screen, game.palette());
     std::string json = "{\n";
+    json += format("  \"half\": %s,\n", o.half ? "true" : "false");
     json += format("  \"size\": \"%dx%d\", \"frames\": %d, \"walk\": %s, \"fire\": %s,\n", screen.width,
                    screen.height, o.frames, o.walk ? "true" : "false", o.fire ? "true" : "false");
     json += format("  \"load_ms\": %.1f, \"skip_frames\": %d, \"in_play\": %s, \"menu_open_at_end\": %s,\n", load_ms,
