@@ -29,6 +29,8 @@ void World::unload_map() {
             }
         }
     }
+    // Nothing is left on the map: the next one starts afresh.
+    items_in_grid_ = true;
 }
 
 // @orig 10B0:05D6

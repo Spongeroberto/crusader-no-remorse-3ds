@@ -552,6 +552,11 @@ public:
     static constexpr int kCellShift = 9;
     // Items of a cell in chain order (empty outside the grid).
     std::span<const ObjId> cell(int cx, int cy) const;
+    // Port only: true while every item put on the map lay inside the grid
+    // (x and y 0..32767, the cells') at a height of 0..255, so that the
+    // display list can find what is on screen through the cells around it.
+    // Once false it stays so until the map is unloaded or the world cleared.
+    bool items_in_grid() const { return items_in_grid_; }
     // True if every item standing on the map is in its cell exactly once.
     bool cells_consistent() const;
 
@@ -828,6 +833,13 @@ private:
     // console without an L2 cache a hash lookup each time cost about 20 ms
     // a frame. Kept beside the map so that loops over items_ keep its order.
     std::vector<Item*> by_id_ = std::vector<Item*>(0x10000, nullptr);
+    bool items_in_grid_ = true;
+    void note_place(const Item& item) {
+        constexpr std::int32_t kGridEnd = kGridSize << kCellShift;
+        if (item.x < 0 || item.y < 0 || item.x >= kGridEnd || item.y >= kGridEnd || item.z < 0 || item.z > 0xFF) {
+            items_in_grid_ = false;
+        }
+    }
     ObjId next_id_ = 1;
     FreeSlots free_items_, free_npcs_;
     std::bitset<kItemSlots> free_mask_;

@@ -313,6 +313,9 @@ target_link_libraries(shape_draw_tests PRIVATE crusader_core)
 add_executable(shape_stream_tests e2e/shape_stream_tests.cpp)
 target_link_libraries(shape_stream_tests PRIVATE crusader_game)
 
+add_executable(display_list_tests e2e/display_list_tests.cpp)
+target_link_libraries(display_list_tests PRIVATE crusader_game)
+
 add_executable(half_render_tests e2e/half_render_tests.cpp)
 target_link_libraries(half_render_tests PRIVATE crusader_game)
 
@@ -322,7 +325,7 @@ target_include_directories(game_tests PRIVATE e2e)
 target_compile_definitions(game_tests PRIVATE CRUSADER_TEST_SAVES="${CRUSADER_TEST_SAVES_DIR}")
 
 if(CRUSADER_GAME_DATA_TESTS)
-    foreach(t core_data_tests shape_draw_tests shape_stream_tests half_render_tests world_data_tests audio_data_tests editor_data_tests game_tests)
+    foreach(t core_data_tests shape_draw_tests shape_stream_tests half_render_tests display_list_tests world_data_tests audio_data_tests editor_data_tests game_tests)
         add_test(NAME ${t} COMMAND ${t} ${CRUSADER_DATA_DIR})
     endforeach()
 endif()

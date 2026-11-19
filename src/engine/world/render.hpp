@@ -16,6 +16,7 @@
 
 #include "core/flex.hpp"
 #include "core/flex_file.hpp"
+#include "core/shape_reach.hpp"
 #include "core/shape.hpp"
 #include "core/surface.hpp"
 #include "engine/world/world.hpp"
@@ -64,6 +65,14 @@ public:
     void load(std::span<const std::uint16_t> shapes);
     void keep_only(std::span<const std::uint16_t> shapes);
 
+    // A bound on how far any shape's frames reach from their anchor
+    // (ShapeReach), or null when there is none. From an archive it is
+    // computed over the whole archive on first use; from a FlexFile it must be
+    // given (set_reach). Every shape parsed is checked against it: one that
+    // reaches further (a stale bound) withdraws it for good.
+    const ShapeReach* reach();
+    void set_reach(const ShapeReach& reach) { reach_ = reach; }
+
     struct Stats {
         std::size_t shapes = 0;        // held now
         std::size_t bytes = 0;         // their file bytes, from a FlexFile
@@ -78,6 +87,7 @@ private:
         std::optional<Shape> shape;
     };
     Entry& add(std::uint16_t shape, std::vector<std::uint8_t> bytes);
+    void check_reach(const Shape& shape);
 
     const FlexArchive* archive_ = nullptr;
     FlexFile* file_ = nullptr;
@@ -86,6 +96,8 @@ private:
     // every item drawn and by the game logic, so an array, not a hash map;
     // each entry on its own so the pointers get() returns stay put.
     std::vector<std::unique_ptr<Entry>> entries_;
+    std::optional<ShapeReach> reach_;
+    bool reach_exceeded_ = false;
     std::size_t bytes_ = 0;
     std::size_t misses_ = 0;
 };
@@ -107,6 +119,7 @@ struct RenderStats {
     std::size_t candidates = 0;   // items in view
     std::size_t drawn = 0;
     std::size_t missing_shape = 0;
+    std::size_t visited = 0;      // items looked at to find those in view
     std::size_t cycle_edges = 0;  // ordering constraints dropped to break cycles
     // First dropped constraints: (item drawn first, item that should have been).
     std::vector<std::pair<const Item*, const Item*>> cycle_samples;
@@ -122,9 +135,12 @@ struct View {
 };
 
 // Items of `world` visible on a w x h screen whose top-left corner is `view`,
-// in draw order.
+// in draw order. With a reach bound from `shapes` and every item inside the
+// grid (World::items_in_grid), only the map cells whose items can reach the
+// screen are visited; otherwise, or with `walk_all`, every item is. The list
+// is the same either way.
 std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes, const View& view, int w, int h,
-                                         RenderStats* stats = nullptr);
+                                         RenderStats* stats = nullptr, bool walk_all = false);
 // Same, centred on `camera` (world units).
 std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes, const Camera& camera, int w,
                                          int h, RenderStats* stats = nullptr);

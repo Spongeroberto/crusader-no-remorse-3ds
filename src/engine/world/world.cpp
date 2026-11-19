@@ -179,6 +179,7 @@ std::vector<ObjId>* World::cell_of(const Item& item) {
 
 void World::link_to_cell(const Item& item) {
     if (!on_map(item)) return;
+    note_place(item);
     if (auto* c = cell_of(item)) c->insert(c->begin(), item.id);
 }
 
@@ -235,6 +236,7 @@ std::size_t World::load_saved_items(const FlexArchive& save) {
 
     items_.clear();
     std::fill(by_id_.begin(), by_id_.end(), nullptr);
+    items_in_grid_ = true;
     clear_tracked();
     for (auto& c : cells_) c.clear();
     next_id_ = 1;
@@ -714,6 +716,7 @@ ObjId World::pop_to_coords(std::int32_t x, std::int32_t y, std::int32_t z) {
     item.x = x;
     item.y = y;
     item.z = std::min<std::int32_t>(z, 250);
+    if (on_map(item)) note_place(item);
     if (fast_area_.contains(x, y)) {
         if (!(item.flags & kItemFastArea) && !expanding_glob_) enter_fast_area(item);
     } else if (item.flags & kItemFastArea) {

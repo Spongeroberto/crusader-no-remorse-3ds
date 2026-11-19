@@ -23,6 +23,7 @@ const Shape* ShapeCache::get(std::uint16_t shape) {
             e.shape.reset();
         }
     }
+    if (e.shape) check_reach(*e.shape);
     return e.shape ? &*e.shape : nullptr;
 }
 
@@ -38,7 +39,21 @@ ShapeCache::Entry& ShapeCache::add(std::uint16_t shape, std::vector<std::uint8_t
             e.shape.reset();
         }
     }
+    if (e.shape) check_reach(*e.shape);
     return e;
+}
+
+// @orig none: port-only bound for the display list
+void ShapeCache::check_reach(const Shape& shape) {
+    if (!reach_ || reach_exceeded_) return;
+    ShapeReach r;
+    r.include(shape);
+    if (!reach_->covers(r)) reach_exceeded_ = true;
+}
+
+const ShapeReach* ShapeCache::reach() {
+    if (!reach_ && archive_) reach_ = archive_reach(*archive_, layout_);
+    return reach_ && !reach_exceeded_ ? &*reach_ : nullptr;
 }
 
 // @orig none: shapes read on request
@@ -155,7 +170,7 @@ std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes,
 
 // @orig ?: display list (DLIST.C), not located
 std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes, const View& view, int w, int h,
-                                         RenderStats* stats) {
+                                         RenderStats* stats, bool walk_all) {
     RenderStats local;
     RenderStats& st = stats ? *stats : local;
     st = {};
@@ -163,7 +178,8 @@ std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes,
     const int cam_sx = view.left + w / 2, cam_sy = view.top + h / 2;
 
     std::vector<DrawItem> items;
-    world.for_each([&](const Item& item) {
+    const auto consider = [&](const Item& item) {
+        ++st.visited;
         if (item.off_map || item.parent != 0 || (item.flags & (kItemInvisible | kItemContained | kItemEthereal))) return;
         const ShapeInfo* info = world.shape_info(item.shape);
         if (info && info->is(ShapeInfo::kEditor)) return;  // editor-only markers
@@ -196,7 +212,35 @@ std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes,
         d.bottom = d.top + fh;
         if (d.right <= 0 || d.bottom <= 0 || d.left >= w || d.top >= h) return;
         items.push_back(d);
-    });
+    };
+    // A frame lies within `reach` of its item's projected place, and an item
+    // in cell (cx, cy) has usecode x in 512 cx .. 512 cx + 511 (world units
+    // twice that), y alike, z in 0..255: a cell whose projected places all
+    // fall more than the reach outside the screen holds nothing to draw.
+    // Items are collected in any order: they are sorted below by a total
+    // order (left, then id).
+    const ShapeReach* reach = walk_all ? nullptr : shapes.reach();
+    if (reach && world.items_in_grid()) {
+        const int ox = w / 2 - cam_sx, oy = h / 2 - cam_sy;
+        constexpr int kCellWorld = 2 << World::kCellShift;  // a cell's side in world units
+        for (int cx = 0; cx < World::kGridSize; ++cx) {
+            const int x0 = cx * kCellWorld, x1 = x0 + kCellWorld - 2;
+            for (int cy = 0; cy < World::kGridSize; ++cy) {
+                const int y0 = cy * kCellWorld, y1 = y0 + kCellWorld - 2;
+                const int sx_min = project_x(x0, y1) + ox, sx_max = project_x(x1, y0) + ox;
+                const int sy_min = project_y(x0, y0, 0xFF) + oy, sy_max = project_y(x1, y1, 0) + oy;
+                if (sx_max <= -reach->right || sx_min >= w + reach->left || sy_max <= -reach->down ||
+                    sy_min >= h + reach->up) {
+                    continue;
+                }
+                for (ObjId id : world.cell(cx, cy)) {
+                    if (const Item* item = world.get(id)) consider(*item);
+                }
+            }
+        }
+    } else {
+        world.for_each(consider);
+    }
     st.candidates = items.size();
 
     // Dependency graph between screen-overlapping items, then DFS topological

@@ -237,6 +237,14 @@ Game::Game(const std::filesystem::path& data, const std::filesystem::path& saves
       save_names_(LoadScreen::read_names(save_dir_)),
       credits_data_(CreditsData::load(files_)),
       help_pictures_(HelpScreen::Pictures::load(files_)) {
+    // Streamed shapes: the display list's reach bound comes from the file
+    // made with the data (shape_reach tool), if it matches this SHAPES.FLX;
+    // without it every item is visited each frame.
+    if (shapes_file_) {
+        if (auto r = read_reach_file(files_.find("STATIC/SHAPES.REACH"), shapes_file_->file_size())) {
+            shapes_.set_reach(*r);
+        }
+    }
     // The US data has no CRUSADER.CFG (the installer writes it): without one,
     // take the installer's choices, the doubled videos and the subtitles.
     if (!std::filesystem::exists(data / "CRUSADER.CFG")) config_.big_video = config_.subtitles = true;
