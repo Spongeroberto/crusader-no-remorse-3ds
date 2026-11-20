@@ -1073,6 +1073,30 @@ void World::update_follow_camera(std::uint32_t elapsed_us) {
     if (dx != 0 || dy != 0) shift_camera(dx, dy);
 }
 
+// @orig none: port-only glide of a move aside
+void World::start_glide(ObjId id, std::int32_t dx, std::int32_t dy, std::int32_t dz) {
+    if (!stick_moves_ || (dx == 0 && dy == 0 && dz == 0)) return;
+    // Drawn where it is drawn now: a glide under way goes on from its point.
+    const Offset now = glide_offset(id);
+    glide_ = {id, dx - now.x, dy - now.y, dz - now.z, kGlideUs};
+}
+
+// @orig none: port-only glide of a move aside
+void World::update_glide(std::uint32_t elapsed_us) {
+    glide_.left_us -= std::min(glide_.left_us, elapsed_us);
+    if (glide_.left_us == 0) glide_ = {};
+}
+
+// @orig none: port-only glide of a move aside
+World::Offset World::glide_offset(ObjId id) const {
+    if (glide_.id == 0 || glide_.id != id || glide_.left_us == 0) return {};
+    // Eased in and out: the share of the way still to go.
+    const double t = static_cast<double>(glide_.left_us) / kGlideUs;
+    const double k = t * t * (3 - 2 * t);
+    const auto part = [k](std::int32_t v) { return -static_cast<std::int32_t>(std::lround(v * k)); };
+    return {part(glide_.dx), part(glide_.dy), part(glide_.dz)};
+}
+
 // @orig none: port-only native resolution, the original screen in a larger view
 World::ScreenRect World::combat_rect() const {
     const ScreenRect view = view_rect();

@@ -27,6 +27,12 @@ bool action_fits(const World& world, const AnimDat& anims, std::uint16_t action,
 
 bool is_roll(std::uint16_t action) { return action == 0x17 || action == 0x18 || action == 0x3D || action == 0x3E; }
 
+// Walking, running and starting to run (AvatarMover's running and run_start).
+bool is_walk_or_run(std::uint16_t action) {
+    return action == 1 || action == 3 || action == 0x22 || action == 0x23 || action == 0x26 || action == 0x30 ||
+           action == 0x31;
+}
+
 // 1158:1A3B / 1C4B: frame skip 3 for the controlled NPC, else the rule of
 // any NPC (frame skip 2 or more, or not on screen), which also covers it.
 bool skips_frames(const World& world, ObjId actor, const Item& item) {
@@ -59,7 +65,7 @@ bool tested_at_start(std::uint16_t action) {
 // 0xB, 0x10) or 0, remapped for the weapon.
 // @orig 1158:016F
 std::uint16_t fit_start(Kernel& kernel, World& world, const AnimDat& anims, ObjId actor, std::uint16_t action,
-                        int dir) {
+                        int& dir) {
     const Item* item = world.get(actor);
     const AnimAction* a = item ? anims.action(item->shape, action) : nullptr;
     if (!a) return action;
@@ -70,6 +76,11 @@ std::uint16_t fit_start(Kernel& kernel, World& world, const AnimDat& anims, ObjI
     const auto move = [&](const SweepResult& r) {
         leave_surface(kernel, world, actor);
         finish_move(world, actor, r);
+        if (world.stick_moves()) {
+            if (const Item* moved = world.get(actor)) {
+                world.start_glide(actor, moved->x - start.x, moved->y - start.y, moved->z - start.z);
+            }
+        }
     };
     World::Point at = start;
     if (action_fits(world, anims, action, actor, dir, at)) return action;
@@ -95,6 +106,23 @@ std::uint16_t fit_start(Kernel& kernel, World& world, const AnimDat& anims, ObjI
             return action;
         }
         return 0x2E;
+    }
+    // Port addition (World::stick_moves): screen directions (2, 6, 10,
+    // 14) are at 45 degrees to the walls, which run along x and y. Against a
+    // wall, the search aside below moves the actor back from it (a side is
+    // across the wall too), up to 80 units at once, and the next stride runs
+    // into it again: the actor jumps back and forth along the wall. A
+    // stick player pushes these directions all the time, so the walk turns
+    // to the neighbouring direction that runs along the wall, when that one
+    // fits; the search aside stays for the rest, such as doorways.
+    if (world.stick_moves() && is_walk_or_run(action) && (dir & 3) == 2) {
+        for (const int turn : {-2, 2}) {
+            const int along = (dir + turn) & 0xF;
+            at = start;
+            if (!action_fits(world, anims, action, actor, along, at)) continue;
+            dir = along;
+            return action;
+        }
     }
     // DS:2A42: 16, 16, 32, 32, 48, 48, 64, 64, 80, 80.
     for (int j = 0; j < 10; ++j) {
@@ -204,8 +232,10 @@ const AnimAction* ActorAnimProcess::start() {
     auto record = world_.npc_record(owner());
     if (record.empty()) return nullptr;
     if (owner() == world_.state.controlled_npc && tested_at_start(action_) && !(record[npc::kCombatFlags] & 0x20)) {
-        action_ = fit_start(kernel(), world_, anims_, owner(), action_, dir_);
+        int dir = dir_;
+        action_ = fit_start(kernel(), world_, anims_, owner(), action_, dir);
         if (action_ >= 0x40) return nullptr;
+        if (dir != dir_) set_direction(dir);
     }
     const Item* item = world_.get(owner());
     const AnimAction* found = item ? anims_.action(item->shape, action_) : nullptr;

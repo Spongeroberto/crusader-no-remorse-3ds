@@ -691,6 +691,27 @@ public:
     // drops its keycards instead of destroying them.
     void set_fix_original_bugs(bool on) { fix_original_bugs_ = on; }
     bool fix_original_bugs() const { return fix_original_bugs_; }
+    // Port addition (GameConfig::directional_move): the controlled NPC is
+    // moved with a stick, in screen directions. A blocked walk or run then
+    // goes along the wall rather than jumping aside (fit_start), and a jump
+    // aside that remains is drawn as a glide (start_glide).
+    void set_stick_moves(bool on) {
+        stick_moves_ = on;
+        if (!on) glide_ = {};
+    }
+    bool stick_moves() const { return stick_moves_; }
+    // Port addition, with stick_moves: `id` has just been put (dx, dy, dz)
+    // away from where it was drawn (ANIMPRIM.C 016F moves the controlled NPC
+    // aside up to 80 units at once). It is drawn there still, then back at
+    // its place over kGlideUs. Drawing only: the game goes on from the place.
+    void start_glide(ObjId id, std::int32_t dx, std::int32_t dy, std::int32_t dz);
+    void update_glide(std::uint32_t elapsed_us);
+    // Where `id` is drawn, relative to its place (usecode units).
+    struct Offset {
+        std::int32_t x = 0, y = 0, z = 0;
+    };
+    Offset glide_offset(ObjId id) const;
+    static constexpr std::uint32_t kGlideUs = 200000;
     // The view is put on another target: the follow's goal, the old target's
     // place, is dropped. Following resumes when the new target moves.
     void stop_following() { follow_active_ = false; }
@@ -843,6 +864,13 @@ private:
     bool remains_loot_ = false;
     std::map<ObjId, std::uint16_t> death_loot_;
     bool fix_original_bugs_ = false;
+    bool stick_moves_ = false;
+    struct Glide {
+        ObjId id = 0;
+        std::int32_t dx = 0, dy = 0, dz = 0;  // from the place to where the glide starts
+        std::uint32_t left_us = 0;
+    };
+    Glide glide_;
     bool follow_active_ = false;  // follow_goal_ is set
     std::int32_t follow_goal_[3] = {0, 0, 0};
     struct FollowSample {

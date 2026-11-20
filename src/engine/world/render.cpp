@@ -192,9 +192,11 @@ std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes,
         d.item = &item;
         d.frame = &shape->frames()[item.frame];
         d.mirrored = item.flags & kItemFlipped;
-        d.x = world_from_usecode(item.x);
-        d.y = world_from_usecode(item.y);
-        d.z = item.z;
+        // A glide (World::start_glide) draws the item away from its place.
+        const World::Offset glide = world.glide_offset(item.id);
+        d.x = world_from_usecode(item.x + glide.x);
+        d.y = world_from_usecode(item.y + glide.y);
+        d.z = item.z + glide.z;
         const int fx = info ? info->footpad_x : 0;
         const int fy = info ? info->footpad_y : 0;
         // A mirrored item has its footpad x/y swapped.

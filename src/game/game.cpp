@@ -913,6 +913,7 @@ void Game::update(std::uint32_t elapsed_us) {
         world_->set_precise_aim(config_.precise_aim);
         world_->set_remains_loot(config_.remains_loot);
         world_->set_fix_original_bugs(config_.fix_original_bugs);
+        world_->set_stick_moves(config_.directional_move);
     }
     // The right stick aims for whichever NPC is controlled (a robot taken over
     // too), with the fire key's conditions (CombatControl::handle_key): not
@@ -951,7 +952,10 @@ void Game::update(std::uint32_t elapsed_us) {
         return;
     }
     dispatch_mouse();
-    if (!modal()) world_->update_follow_camera(elapsed_us);
+    if (!modal()) {
+        world_->update_follow_camera(elapsed_us);
+        world_->update_glide(elapsed_us);
+    }
     const std::uint32_t before = kernel_->ticks();
     // Port: a frame spanning several ticks (slow drawing of a large view) gets
     // one pass per tick, up to 4, instead of the game slowing down.

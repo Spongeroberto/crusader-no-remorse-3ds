@@ -860,6 +860,94 @@ void test_walk_alignment() {
     }
 }
 
+// Stick movement (World::stick_moves): a walk in a screen direction, at 45
+// degrees to a wall it cannot pass, turns to go along the wall. Without it,
+// the search aside of ANIMPRIM.C 016F puts the player 16 units back from the
+// wall and 16 along it at once, and the stride runs into the wall again.
+void test_stick_wall_slide() {
+    constexpr std::size_t table = AnimDat::kShapes * 4, action = table + AnimDat::kActions * 4;
+    std::vector<std::uint8_t> bytes(action + 4 + 8 * 4 * 8);
+    auto u32 = [&](std::size_t at, std::size_t value) {
+        for (int b = 0; b < 4; ++b) bytes[at + b] = static_cast<std::uint8_t>(value >> (b * 8));
+    };
+    u32(4, table);
+    u32(table + 4, action);
+    bytes[action] = 4;
+    bytes[action + 1] = 1;
+    bytes[action + 2] = 1;
+    for (std::size_t f = 0; f < 8 * 4; ++f) {
+        bytes[action + 4 + f * 8 + 4] = 4;  // distance 4 * 2 = 8
+        bytes[action + 4 + f * 8 + 5] = 2;  // ground check
+    }
+    const AnimDat anims = AnimDat::parse(bytes);
+    for (bool stick : {false, true}) {
+        std::vector<ShapeInfo> tf(4);
+        tf[1].flags = ShapeInfo::kSolid | ShapeInfo::kNpc;
+        tf[1].footpad_x = tf[1].footpad_y = tf[1].footpad_z = 1;
+        tf[2].flags = tf[3].flags = ShapeInfo::kSolid | ShapeInfo::kFixed;
+        tf[2].footpad_x = tf[2].footpad_y = 16;
+        // A wall along x: x 0..255, y 125..140.
+        tf[3].footpad_x = 16;
+        tf[3].footpad_y = 1;
+        tf[3].footpad_z = 8;
+        World w(tf);
+        w.set_stick_moves(stick);
+        w.create(2, 0);
+        w.pop_to_coords(255, 255, 0);
+        w.create(3, 0);
+        w.pop_to_coords(255, 140, 0);
+        Item player;
+        player.id = player.shape = 1;
+        player.x = 150;
+        player.y = 110;
+        w.add_with_id(player);
+        w.set_camera(150, 110, 0);
+        w.state.controlled_npc = 1;
+        w.set_frame_lookup([](std::uint16_t, std::uint16_t) { return std::optional<FrameBox>{{4000, 4000, 2000, 2000}}; });
+        Kernel k;
+        // Direction 10 (-x, +y), the screen's left: a half stride of 16 would
+        // reach y 126, in the wall.
+        do_anim(k, w, anims, 1, 1, 10);
+        for (int f = 0; f < 10; ++f) {
+            k.advance_time(16667);
+            k.run_slice();
+        }
+        const Item* p = w.get(1);
+        CHECK(p);
+        if (!p) continue;
+        std::printf("stick wall slide: stick %d, at %d %d, direction %d\n", stick, p->x, p->y, w.npc_direction(1));
+        if (stick) {
+            // Along the wall (direction 12, -x), at the same distance from it.
+            CHECK(p->x == 134 && p->y == 110 && w.npc_direction(1) == 12);
+        } else {
+            // Put 16 along -x and 16 back from the wall, then the stride.
+            CHECK(p->x == 118 && p->y == 110 && w.npc_direction(1) == 10);
+            CHECK(w.glide_offset(1).x == 0 && w.glide_offset(1).y == 0);
+        }
+        CHECK(position_free(w, 1, w.location(*p), nullptr, 1));
+    }
+}
+
+// A move aside with stick movement is drawn as a glide back to the place.
+void test_glide() {
+    World w;
+    w.start_glide(1, 32, 0, 0);
+    CHECK(w.glide_offset(1).x == 0);  // only with stick movement
+    w.set_stick_moves(true);
+    w.start_glide(1, 32, -16, 0);
+    CHECK(w.glide_offset(1).x == -32 && w.glide_offset(1).y == 16 && w.glide_offset(2).x == 0);
+    w.update_glide(World::kGlideUs / 2);
+    CHECK(w.glide_offset(1).x == -16 && w.glide_offset(1).y == 8);
+    // A second move aside goes on from where the item is drawn.
+    w.start_glide(1, 16, 0, 0);
+    CHECK(w.glide_offset(1).x == -32 && w.glide_offset(1).y == 8);
+    w.update_glide(World::kGlideUs);
+    CHECK(w.glide_offset(1).x == 0 && w.glide_offset(1).y == 0);
+    w.start_glide(1, 32, 0, 0);
+    w.set_stick_moves(false);
+    CHECK(w.glide_offset(1).x == 0);
+}
+
 void test_scripted_camera() {
     World w;
     w.state.controlled_npc = w.state.camera_target = 1;
@@ -1605,6 +1693,8 @@ int main() {
     test_footprint_intrinsics();
     test_collisions();
     test_walk_alignment();
+    test_stick_wall_slide();
+    test_glide();
     test_pathfinder_test_walk();
     test_walk_activity_blocked();
     test_scripted_camera();

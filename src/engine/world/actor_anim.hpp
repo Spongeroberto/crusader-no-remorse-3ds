@@ -134,9 +134,12 @@ void special_frame(Kernel& kernel, World& world, const AnimDat& anims, ObjId act
 // ANIMPRIM.C 016F for the controlled NPC (actions 1, 2, 3, 0x17, 0x18, 0x22,
 // 0x23, 0x24, 0x26, 0x2C, 0x2D, 0x30, 0x31, 0x3D, 0x3E): the action played
 // from where the actor stands, or from a place nearby it moves to first, or
-// the action that replaces it (see actor_anim.cpp). 0x40: nothing.
+// the action that replaces it (see actor_anim.cpp). 0x40: nothing. With
+// World::stick_moves, a walk or run may turn by 45 degrees: `dir`
+// becomes the direction to play it in. A move aside then starts a glide
+// (World::start_glide).
 std::uint16_t fit_start(Kernel& kernel, World& world, const AnimDat& anims, ObjId actor, std::uint16_t action,
-                        int dir);
+                        int& dir);
 
 // Actor::I_doAnim: queues `action` facing `dir` (0..15 or kDir*) for `actor`.
 // Refused (0) when the actor is parked (z 254), dead, has no such action, or

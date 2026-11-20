@@ -254,6 +254,9 @@ The original uses tank controls: up walks forward, left/right turn. With this op
   - to its left / right: **side steps**, `Alt + left / right` (actions `0x1C` / `0x1D`).
 - Without aiming, the stick keeps the absolute directions, weapon out or not.
 - Changing between the absolute directions and the strafes releases the old key and Alt **before** pressing the new one, so no key is sent with the wrong modifier.
+- **Along walls**: before a walk or run, the original tries the whole half stride from where the Silencer stands; when it does not fit, it puts him **16 to 80 units aside** (across the walk, left first) at the first place it fits from (ANIMPRIM.C 016F; ScummVM's `CruAvatarMoverProcess::step` does the same). Walls run along the map's x and y axes, which are the screen's diagonals, so the stick's east, north, west and south (6, 8, 4, 2) meet them at 45°: "aside" is then partly back from the wall, the Silencer jumps back and along it at once, and the next stride runs into the wall again. In this mode:
+  - a walk or run (actions `1`, `3`, `0x22`, `0x23`, `0x26`, `0x30`, `0x31`) in one of these four directions that does not fit turns by 45° to a neighbouring direction (left first) **that does fit**, and goes along the wall;
+  - when neither fits (an inside corner), the original's move aside remains but is **drawn as a 200 ms glide** from where he was drawn to his new place; only the drawing lags, the game goes on from the new place.
 
 ---
 
