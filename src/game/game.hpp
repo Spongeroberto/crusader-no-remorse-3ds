@@ -191,6 +191,9 @@ public:
     void mouse_button(bool pressed, int x, int y) { mouse_button(1, pressed, x, y); }
     void mouse_button(int button, bool pressed, int x, int y);
     const MouseCursor& cursor() const { return cursor_; }
+    // Port addition: a platform without a pointer (the 3DS) never shows the
+    // cursor; the game keeps its state, only the drawing is skipped.
+    void set_cursor_drawn(bool drawn) { cursor_drawn_ = drawn; }
     // Controller screen (options): it waits for a button press to bind, which
     // the platform gives with pad_button() instead of sending its key.
     bool waiting_for_pad() const;
@@ -417,6 +420,7 @@ private:
     Palette menu_palette_;
     Palette difficulty_palette_;
     MouseCursor cursor_;
+    bool cursor_drawn_ = true;
     std::filesystem::path data_;
     std::filesystem::path mod_;  // level editor files that replace the data's
     int start_map_ = 1;

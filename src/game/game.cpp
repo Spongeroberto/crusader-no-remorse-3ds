@@ -1889,7 +1889,7 @@ void Game::render(Surface8& screen, RenderStats* stats) {
         draw_window(screen, ui_x_, ui_y_, [this](Surface8& s) {
             if (menu_) menu_->draw(s);
             else screen_->draw(s);
-            cursor_.draw(s);
+            if (cursor_drawn_) cursor_.draw(s);
         });
         return;
     }
@@ -1898,7 +1898,7 @@ void Game::render(Surface8& screen, RenderStats* stats) {
         draw_autosave_icon(s);
         if (message_) message_->draw(s);
         if (screen_) screen_->draw(s);
-        cursor_.draw(s);
+        if (cursor_drawn_) cursor_.draw(s);
     };
     if (screen_) draw_window(screen, ui_x_, ui_y_, overlays);  // a UI screen may use the pixels directly
     else draw_window_in_place(screen, ui_x_, ui_y_, overlays);
