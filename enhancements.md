@@ -203,7 +203,7 @@ In menus, message boxes and screens, some inputs are **fixed**, whatever the bin
 Holding **Select + Start** together quits the game. It is the only way out on handhelds (PortMaster), where `gptokeyb` is not used.
 
 ### 2.8b Save names without a keyboard (PortMaster)
-Handhelds have no keyboard to type a save's name, and the original refuses to save under an empty one. With **`--auto-save-names`**, which only the PortMaster launcher (`Crusader.sh`) passes:
+Handhelds have no keyboard to type a save's name, and the original refuses to save under an empty one. With **`--auto-save-names`**, which only the PortMaster launcher (`Crusader No Remorse.sh`) passes:
 - choosing a slot on the Save screen (F9 or the menu's "save game") proposes the **local date and time** as its name, in place of the slot's: `12/11/2026 14:32` (French: day first), `11/12/2026 14:32` (US: month first), `12.11.2026 14:32` (German);
 - **A** saves under it, **B** leaves the slot as it was; a keyboard plugged in can still edit the name;
 - a console whose clock is not set (before 2020) gets `SAUVEGARDE` / `SAVED GAME` instead.
@@ -341,6 +341,12 @@ The search above works on the ground, in 16-way directions. A target on another 
 - Scale factor = the largest whole number for which `window / factor` is still at least 640×480. Pixels stay square and sharp.
 - Logical view size = `max(640, width / factor)` × `max(480, height / factor)`.
 - The camera keeps its place relative to the centre: origin at `w/2` from the left and `300 + (h − 480)/2` from the top. The extra pixels are spread around the scene.
+- The fast area grows with the view. This is the area where the "glob" scenery is unfolded, monster eggs create their NPCs and items run. The original sets it to ±5 cells in `s = cx + cy` and ±3 in `d = cx − cy` around the camera cell, which goes beyond the 640×480 screen. The port adds one cell of `d` per 256 extra pixels on each side, and one of `s` per 128 extra pixels above and below. The world is always complete in the view, and everything still wakes up out of sight. At 640×480 the area is the original one.
+- **The combat zone stays the original's**: the 640×480 screen the original would show (`World::combat_rect`). It is centred on the camera like the original screen when the camera is placed. Then it scrolls by the original rules as the Silencer moves: when he gets within 100 pixels of its left or right edge, 140 of its top or 70 of its bottom, it jumps to put him back (`track_camera_target`). This happens whether the larger view scrolls on its own edges or follows him, and the zone always stays whole inside the view. So the Silencer never leaves it, even when he walks far from the centre of a wide view.
+  - An NPC only spots the player, keeps him as a target, fires or is woken by a shot inside this zone. The player's shots only pick their target there.
+  - An enemy in the side bands is visible, patrols and comes closer, but behaves like an off-screen enemy in the original.
+  - Security cameras (CAMERACO, CAMERANS, CAMERAEW) and wall guns (WALLGUN) sweep as soon as they are in the view (`Item::I_isPartlyOnScreen`, 0x007, tests the whole view). They only spot the player from the combat zone: `Item::I_getRangeIfVisible` (0x044) for the cameras, `Item::I_fireDistance` (0x116) for the guns. A camera in a band therefore sweeps over the Silencer without raising the alarm, as the original never let it see that far.
+  - Purely visual tests keep the whole view: animation frame skipping, sound volume, and effect scripts (bubbles, flames, steam).
 - **These stay 640×480, centred**: menus, screens (options, load, keypad, computers…), cutscenes, status bar, message boxes, cursor and autosave icon. The rest of the screen is black behind menus and cutscenes.
 - Mouse coordinates are mapped to this centred 640×480 block.
 - With the option off, or with `--classic` on the command line: the original 640×480 view, stretched to the window.
@@ -729,7 +735,7 @@ These differences are deliberate or not yet resolved. They are documented in the
 - A reused item slot does not keep its old coordinates.
 - During a cutscene, the timed processes are frozen, and the sound plays as one buffer.
 - US data: the reset of the player and inventory between missions that the US executable does is not reproduced.
-- Cheats: the typed code, `-laurie`, F10, Ctrl+F10, `~`, T, f, Ctrl+Q, Ctrl+L, Ctrl+M and Weasel's free level work as in the original; its debugging displays (bounding boxes of f, F7, Alt+F7, Ctrl+F7), the "hack mover" (H) and the memory status (Ctrl+V) are not reproduced (`src/engine/world/cheats.hpp`).
+- Cheats: the typed code, `-laurie`, F10, Ctrl+F10, `~`, T, f, Ctrl+Q, Ctrl+L, Ctrl+M, the "hack mover" (H: drag items and characters with the left button) and Weasel's free level work as in the original; its debugging displays (bounding boxes of f, F7, Alt+F7, Ctrl+F7) and the memory status (Ctrl+V) are not reproduced (`src/engine/world/cheats.hpp`). With a native-resolution view, the hack mover's cursor stays in the 640 x 480 window at the centre of the screen, and the mover no longer clears the player's second ammunition slot when it takes an item (a leftover of Ultima 8 in the original, `src/engine/world/world_mouse.hpp`).
 
 ---
 
@@ -752,7 +758,7 @@ These differences are deliberate or not yet resolved. They are documented in the
 - Windows x64 (SDL2 built into the executable), Linux x64, and **Linux aarch64 handhelds through PortMaster** (muOS, Knulli, ROCKNIX, ArkOS…). The cross-build uses Zig (`tools/portmaster/build.py`).
 
 **PortMaster**
-- `Crusader.sh` launcher, which checks the data and logs to `log.txt`.
+- `Crusader No Remorse.sh` launcher, which checks the data and logs to `log.txt`.
 - `port.json` and `gameinfo.xml` metadata.
 - The game reads the controller itself, **without `gptokeyb`**, whose default keys doubled every input.
 - Select + Start quits the game.
@@ -767,7 +773,7 @@ These differences are deliberate or not yet resolved. They are documented in the
 
 **Files:** `src/editor/`, `src/game/game.*` (`game_file`, `set_start`), `docs/EDITEUR.md`
 
-The original ships no editor. `crusader-editor` (Dear ImGui on SDL2, rendered by the port's engine) opens the maps of `FIXED.DAT` and the globs of `GLOB.FLX`, decodes the egg parameters (triggers, teleports, monsters, globs, markers) and the low-quality links, and saves to a mod folder without touching the data. The game reads that folder with `--mod` and starts on a given map with `--map`. Full user guide: `docs/EDITEUR.md`.
+The original ships no editor. `crusader-no-remorse-editor` (Dear ImGui on SDL2, rendered by the port's engine) opens the maps of `FIXED.DAT` and the globs of `GLOB.FLX`, decodes the egg parameters (triggers, teleports, monsters, globs, markers) and the low-quality links, and saves to a mod folder without touching the data. The game reads that folder with `--mod` and starts on a given map with `--map`. Full user guide: `docs/EDITEUR.md`.
 
 **Rules**
 - Unmodified maps and globs are rewritten byte for byte (`editor_data_tests`); container contents keep their raw depth (map 244 contains records that are not objects).
