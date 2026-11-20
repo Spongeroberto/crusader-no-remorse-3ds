@@ -26,7 +26,7 @@ set(CRUSADER_BENCH_VARIANT "" CACHE STRING "Suffix for the bench's title; also g
 
 add_executable(crusader-bench main.cpp "${repo}/src/tools/bench_run.cpp")
 target_link_libraries(crusader-bench PRIVATE crusader_game)
-target_include_directories(crusader-bench PRIVATE "${repo}/src")
+target_include_directories(crusader-bench PRIVATE "${repo}/src" "${CMAKE_CURRENT_SOURCE_DIR}/../common")
 
 ctr_generate_smdh(crusader-bench.smdh
     NAME "Crusader bench"

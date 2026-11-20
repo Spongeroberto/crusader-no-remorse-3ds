@@ -7,6 +7,7 @@
 #include "core/palette.hpp"
 #include "core/surface.hpp"
 #include "tools/bench_run.hpp"
+#include "top_screen.hpp"
 
 #include <3ds.h>
 #include <malloc.h>
@@ -41,26 +42,9 @@ long heap_peak_kb() {
     return static_cast<long>(mallinfo().arena / 1024);
 }
 
-// The last frame on the top screen at half size: every other pixel of every
-// other line, which is what drawing straight at half resolution would give.
-// The framebuffer is BGR8, stored column by column from the bottom up.
-void show_half_size(const crusader::Surface8& screen, const crusader::Palette& palette) {
-    u16 fb_h = 0, fb_w = 0;  // 240, 400
-    u8* fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &fb_h, &fb_w);
-    const int w = std::min<int>(fb_w, screen.width / 2), h = std::min<int>(fb_h, screen.height / 2);
-    const int x0 = (fb_w - w) / 2, y0 = (fb_h - h) / 2;
-    for (int y = 0; y < h; ++y) {
-        // A half-resolution screen stores just these pixels; a full one is halved here.
-        const int step = screen.half_resolution() ? 1 : 2;
-        const std::uint8_t* row = screen.row(step * y);
-        for (int x = 0; x < w; ++x) {
-            const crusader::Rgb c = palette.colors[row[step * x]];
-            u8* p = fb + 3 * ((x0 + x) * fb_h + (fb_h - 1 - (y0 + y)));
-            p[0] = c.b;
-            p[1] = c.g;
-            p[2] = c.r;
-        }
-    }
+// The last frame on the top screen.
+void show_last_frame(const crusader::Surface8& screen, const crusader::Palette& palette) {
+    crusader::ctr::draw_to_top_screen(screen, palette);
     gfxFlushBuffers();
     gfxSwapBuffers();
 }
@@ -100,7 +84,7 @@ int main() {
     // shown at half size on the 400 x 240 top screen.
     options.width = 800;
     options.height = 480;
-    options.last_frame = show_half_size;
+    options.last_frame = show_last_frame;
     options.half = true;
     options.walk = true;
     options.now_us = tick_us;
