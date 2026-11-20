@@ -73,6 +73,13 @@ public:
     };
     Contents contents(const World& world) const;
 
+    // The icon of the active item box (box 2): GUMPS.FLX shape and frame.
+    struct Icon {
+        std::uint16_t shape = 0;
+        std::uint16_t frame = 0;
+    };
+    static Icon item_icon(const World& world, const Item& item);
+
 private:
     void draw_gump(Surface8& screen, std::uint16_t shape, std::uint16_t frame, int x, int y,
                    const XformTable* xform = nullptr) const;

@@ -92,6 +92,19 @@ StatusBar::Contents StatusBar::contents(const World& world) const {
 }
 
 // @orig 11B8:0192
+StatusBar::Icon StatusBar::item_icon(const World& world, const Item& item) {
+    if (item.shape == kCredits) return {3, 13};
+    if (world.family_of(item.shape) == 12) return {4, dtable::item_icon_family12(item.shape)};
+    std::uint16_t frame = dtable::item_icon(item.shape);
+    if (item.frame != 0) {
+        if (frame == 3) frame = 0x12;
+        else if (frame == 5) frame = 0x11;
+        else if (frame == 7) frame = 0x13;
+    }
+    return {5, frame};
+}
+
+// @orig 11B8:0192
 void StatusBar::draw(Surface8& screen, const World& world) const {
     if (!world.state.status_bar_visible) return;
     const bool player = world.state.controlled_npc == kPlayer;
@@ -124,22 +137,8 @@ void StatusBar::draw(Surface8& screen, const World& world) const {
             break;
         case 2:
             if (const Item* it = c.item ? world.get(c.item) : nullptr) {
-                std::uint16_t shape = 5, frame = 0;
-                if (it->shape == kCredits) {
-                    shape = 3;
-                    frame = 13;
-                } else if (world.family_of(it->shape) == 12) {
-                    shape = 4;
-                    frame = dtable::item_icon_family12(it->shape);
-                } else {
-                    frame = dtable::item_icon(it->shape);
-                    if (it->frame != 0) {
-                        if (frame == 3) frame = 0x12;
-                        else if (frame == 5) frame = 0x11;
-                        else if (frame == 7) frame = 0x13;
-                    }
-                }
-                draw_gump(screen, shape, frame, center(r.x0, r.x1), center(r.y0, r.y1));
+                const Icon icon = item_icon(world, *it);
+                draw_gump(screen, icon.shape, icon.frame, center(r.x0, r.x1), center(r.y0, r.y1));
                 if (signed_quality(*it) > 1) {
                     TextWriter(*fonts_, kItemFont).print(screen, r.x0 + 75, r.y0 + 18, std::to_string(signed_quality(*it)));
                 }

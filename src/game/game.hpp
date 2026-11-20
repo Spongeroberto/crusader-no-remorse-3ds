@@ -194,6 +194,9 @@ public:
     // Port addition: a platform without a pointer (the 3DS) never shows the
     // cursor; the game keeps its state, only the drawing is skipped.
     void set_cursor_drawn(bool drawn) { cursor_drawn_ = drawn; }
+    // Port addition: a platform that shows the equipment on a second screen
+    // (the 3DS) leaves the status bar out of the view.
+    void set_status_bar_drawn(bool drawn) { status_bar_drawn_ = drawn; }
     // Controller screen (options): it waits for a button press to bind, which
     // the platform gives with pad_button() instead of sending its key.
     bool waiting_for_pad() const;
@@ -217,6 +220,8 @@ public:
     bool weapon_out() const;
     const WorldMouse& world_mouse() const { return *world_mouse_; }
     ShapeCache& shapes() { return shapes_; }
+    ShapeCache& gumps() { return gumps_; }
+    const XformTable& xform() const { return xform_; }
 
     // In-game menu (Escape, WORLD_13e8_10c3). Closing it with "quit" sets
     // quit_requested(); with a slot chosen in "load", that game is loaded at
@@ -421,6 +426,7 @@ private:
     Palette difficulty_palette_;
     MouseCursor cursor_;
     bool cursor_drawn_ = true;
+    bool status_bar_drawn_ = true;
     std::filesystem::path data_;
     std::filesystem::path mod_;  // level editor files that replace the data's
     int start_map_ = 1;

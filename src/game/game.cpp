@@ -1922,7 +1922,7 @@ void Game::render_view(Surface8& screen, RenderStats* stats, bool keep_view) {
         copy_block(view, (view_w - w) / 2, (view_h - h) / 2, screen, (screen.width - w) / 2, (screen.height - h) / 2, w,
                    h);
         // The status bar, at the bottom of the large view, at the bottom of this one.
-        if (screen.width >= kScreenWidth && screen.height >= kScreenHeight) {
+        if (status_bar_drawn_ && screen.width >= kScreenWidth && screen.height >= kScreenHeight) {
             draw_window(screen, (screen.width - kScreenWidth) / 2, screen.height - kScreenHeight,
                         [this](Surface8& s) { status_bar_.draw(s, *world_); });
         }
@@ -1998,8 +1998,10 @@ void Game::render_view(Surface8& screen, RenderStats* stats, bool keep_view) {
         }
     }
     // The status bar is laid out for 640 pixels: centred at the bottom.
-    draw_window_in_place(screen, ui_x_, screen.height - kScreenHeight,
-                         [this](Surface8& s) { status_bar_.draw(s, *world_); });
+    if (status_bar_drawn_) {
+        draw_window_in_place(screen, ui_x_, screen.height - kScreenHeight,
+                             [this](Surface8& s) { status_bar_.draw(s, *world_); });
+    }
     // DISPLAY_1190_010f, not in the menu mode (DS:2CEE, set with DS:2D8F).
     if (!sprites_suspended_) pickup_area_.draw(screen, world_->state.pickups);
     if (profile_clock_) {

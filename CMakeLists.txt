@@ -116,6 +116,7 @@ add_library(crusader_engine
   src/engine/input/mouse_queue.cpp
   src/engine/ui/status_bar.cpp
   src/engine/ui/pickup_area.cpp
+  src/engine/ui/inventory_panel.cpp
   src/engine/ui/computer_gump.cpp
   src/engine/ui/keypad_gump.cpp
   src/engine/ui/weasel_gump.cpp
