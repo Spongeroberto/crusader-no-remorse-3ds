@@ -37,4 +37,24 @@ inline void draw_to_top_screen(const Surface8& screen, const Palette& palette) {
     }
 }
 
+// Writes a 320 x 240 surface into the bottom screen's framebuffer, laid out
+// as the top one's.
+inline void draw_to_bottom_screen(const Surface8& screen, const Palette& palette) {
+    u16 fb_h = 0, fb_w = 0;  // 240, 320
+    u8* fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &fb_h, &fb_w);
+    const int w = std::min<int>(fb_w, screen.stored_width());
+    const int h = std::min<int>(fb_h, screen.stored_height());
+    std::array<std::array<u8, 3>, 256> bgr;
+    for (int i = 0; i < 256; ++i) bgr[i] = {palette.colors[i].b, palette.colors[i].g, palette.colors[i].r};
+    for (int x = 0; x < w; ++x) {
+        u8* p = fb + 3 * (x * fb_h + (fb_h - h));
+        for (int y = h - 1; y >= 0; --y, p += 3) {
+            const auto& c = bgr[screen.row(y)[x]];
+            p[0] = c[0];
+            p[1] = c[1];
+            p[2] = c[2];
+        }
+    }
+}
+
 }  // namespace crusader::ctr

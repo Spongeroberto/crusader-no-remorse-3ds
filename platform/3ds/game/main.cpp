@@ -1,13 +1,16 @@
 // Crusader: No Remorse on a 3DS: the game's 800 x 480 view drawn at half
-// resolution on the top screen, the controls on the bottom one. Buttons send
+// resolution on the top screen, the player's equipment on the bottom one in
+// play (engine/ui/inventory_panel.hpp), the controls in menus. Buttons send
 // the original's keys, as the PC version's gamepad does (core/pad_config.hpp).
 // There is no mouse: the cursor is never drawn and every menu, screen and
-// question is answered with keys. Data comes from romfs:/data when the
+// question is answered with keys. In play a tap on the equipment picks a
+// weapon or item. Data comes from romfs:/data when the
 // CIA bundles it, else from sdmc:/3ds/crusader/data; saves and settings go to
 // sdmc:/3ds/crusader. No sound yet.
 
 #include "core/pad_config.hpp"
 #include "engine/input/keyboard.hpp"
+#include "engine/ui/inventory_panel.hpp"
 #include "game/game.hpp"
 #include "top_screen.hpp"
 
@@ -105,7 +108,55 @@ public:
         }
     }
 
+    // A tap on the equipment (`shown`, as drawn): a weapon or item is made
+    // active with the game's own keys, next weapon (W) or previous item (I)
+    // once every other frame until it is (the game refuses a key while the
+    // player is busy, so a few more are allowed).
+    // Previous item, since going up the items never reaches the last slot.
+    void touch(const InventoryPanel::State& shown) {
+        if (tapped_) {
+            key(tapped_->scancode, tapped_->extended, false);
+            tapped_ = nullptr;
+            return;
+        }
+        if (!shown.shown) {
+            want_ = {};
+            return;
+        }
+        if (hidKeysDown() & KEY_TOUCH) {
+            touchPosition t;
+            hidTouchRead(&t);
+            const InventoryPanel::Hit hit = InventoryPanel::hit(t.px, t.py);
+            switch (hit.target) {
+            case InventoryPanel::Target::Weapon:
+                if (shown.weapons[hit.slot - InventoryPanel::kFirstWeapon].id) want_ = hit;
+                tries_ = kTries;
+                break;
+            case InventoryPanel::Target::Item:
+                if (shown.items[hit.slot - InventoryPanel::kFirstItem].id) want_ = hit;
+                tries_ = kTries;
+                break;
+            case InventoryPanel::Target::None: break;
+            }
+        }
+        const bool weapon = want_.target == InventoryPanel::Target::Weapon;
+        if (want_.target == InventoryPanel::Target::None) return;
+        if ((weapon ? shown.active_weapon : shown.active_item) == want_.slot || tries_-- <= 0) {
+            want_ = {};
+            return;
+        }
+        tap(action(weapon ? kPadNextWeapon : kPadPrevItem));
+    }
+
 private:
+    static constexpr int kTries = 30;
+
+    // Pressed now, released at the next touch().
+    void tap(const PadAction* a) {
+        key(a->scancode, a->extended, true, a->ascii);
+        tapped_ = a;
+    }
+
     void key(std::uint8_t scancode, bool extended, bool pressed, std::uint8_t ascii = 0) {
         // The BIOS shift flags follow the modifier keys, as the keyboard ISR keeps them.
         std::uint16_t mod = 0;
@@ -181,24 +232,100 @@ private:
     std::uint16_t flags_ = 0;
     int move_dir_ = -1;
     int arrow_dir_ = -1;
+    const PadAction* tapped_ = nullptr;
+    InventoryPanel::Hit want_;
+    int tries_ = 0;
 };
 
-void print_help() {
-    std::printf("\x1b[2J\x1b[1;1H");
-    std::printf("Crusader: No Remorse (3DS port)\n\n");
-    std::printf(" Circle pad  move (screen direction)\n");
-    std::printf(" A  fire        B  jump\n");
-    std::printf(" X  select      Y  next weapon\n");
-    std::printf(" L  kneel       R  run (hold)\n");
-    std::printf(" D-pad  use item, medkit,\n");
-    std::printf("        previous / next item\n");
-    std::printf(" SELECT  use selected (Enter)\n");
-    std::printf(" START   menu\n");
-    std::printf(" Menus: D-pad or circle pad, A enter,\n");
-    std::printf("        B back / no, X yes,\n");
-    std::printf("        Y weapons / ammo (shop)\n");
-    std::printf(" START + SELECT  quit\n\n");
-}
+// The controls in menus, in the font of the movie subtitles (light, for a
+// dark background).
+constexpr std::array<const char*, 14> kHelp = {
+    "Crusader: No Remorse (3DS port)",
+    "Circle pad   move",
+    "A  fire           B  jump",
+    "X  select         Y  next weapon",
+    "L  kneel          R  run (hold)",
+    "D-pad  use item, medkit,",
+    "       previous / next item",
+    "SELECT  use selected   START  menu",
+    "Touch the equipment to pick a",
+    "weapon or item",
+    "Menus: D-pad or circle pad,",
+    "  A enter, B back / no, X yes,",
+    "  Y weapons / ammo (shop)",
+    "START + SELECT  quit",
+};
+constexpr int kHelpFont = 4;
+
+// The bottom screen: the equipment in play, the controls otherwise, and the
+// frame times. Single-buffered, written only when what it shows changes.
+class BottomScreen {
+public:
+    explicit BottomScreen(Game& game)
+        : game_(game), panel_(game.gumps(), game.fonts(), game.xform()),
+          surface_(InventoryPanel::kWidth, InventoryPanel::kHeight) {}
+
+    const InventoryPanel::State& state() const { return state_; }
+
+    void update(const std::string& stats) {
+        const InventoryPanel::State state =
+            game_.mouse_in_play() ? InventoryPanel::read(game_.world(), game_.status_bar()) : InventoryPanel::State{};
+        if (drawn_ && state == state_ && stats == stats_ && same_colours(game_.palette(), palette_)) return;
+        state_ = state;
+        stats_ = stats;
+        palette_ = game_.palette();
+        drawn_ = true;
+        panel_.draw(surface_, game_.world(), state_, palette_);
+        if (!state_.shown) {
+            for (std::size_t i = 0; i < kHelp.size(); ++i) print(6, 6 + 15 * static_cast<int>(i), kHelp[i]);
+        }
+        print(4, InventoryPanel::kHeight - 12, stats_);
+        ctr::draw_to_bottom_screen(surface_, palette_);
+    }
+
+private:
+    // The glyphs' colours are palette entries, black under some palettes:
+    // the text is drawn in the light grey nearest in the current palette.
+    void print(int x, int y, const std::string& text) {
+        // (x, y) is the pen, as TextWriter::print takes it; glyphs reach above
+        // and below it.
+        line_.clear(kNoInk);
+        TextWriter(game_.fonts(), kHelpFont).print(line_, 0, kLinePen, text);
+        const std::uint8_t ink = InventoryPanel::nearest(palette_, {216, 216, 216});
+        for (int r = 0; r < line_.height; ++r) {
+            const int to = y - kLinePen + r;
+            if (to < 0 || to >= surface_.height) continue;
+            const std::uint8_t* src = line_.row(r);
+            std::uint8_t* dst = surface_.row(to);
+            for (int c = 0; c < line_.width && x + c < surface_.width; ++c) {
+                if (src[c] != kNoInk) dst[x + c] = ink;
+            }
+        }
+    }
+
+    static constexpr std::uint8_t kNoInk = 0xFF;
+    static constexpr int kLinePen = 12;
+
+    // The palette, cycled entries aside: their colours change every few frames
+    // and the panel is not redrawn for them (they would pulse anyway).
+    static bool same_colours(const Palette& a, const Palette& b) {
+        for (int i = 0; i < 256; ++i) {
+            if (i >= InventoryPanel::kFirstCycled && i <= InventoryPanel::kLastCycled) continue;
+            const Rgb &x = a.colors[i], &y = b.colors[i];
+            if (x.r != y.r || x.g != y.g || x.b != y.b) return false;
+        }
+        return true;
+    }
+
+    Game& game_;
+    Surface8 line_{InventoryPanel::kWidth, 2 * kLinePen};
+    InventoryPanel panel_;
+    Surface8 surface_;
+    InventoryPanel::State state_;
+    Palette palette_;
+    std::string stats_;
+    bool drawn_ = false;
+};
 
 void wait_for_start() {
     std::printf("\nPress START to exit.\n");
@@ -213,8 +340,7 @@ void wait_for_start() {
 
 int main() {
     gfxInitDefault();
-    consoleInit(GFX_BOTTOM, nullptr);
-    print_help();
+    gfxSetDoubleBuffering(GFX_BOTTOM, false);
 
     namespace fs = std::filesystem;
     const bool romfs = R_SUCCEEDED(romfsInit());
@@ -234,7 +360,10 @@ int main() {
         game.config().directional_move = true;
         game.start_up();
         game.set_cursor_drawn(false);  // no pointer: menus are played with keys
+        game.set_status_bar_drawn(false);  // the bottom screen shows it
         Controls controls(game);
+        BottomScreen bottom(game);
+        std::string stats;
         Surface8 screen = Surface8::half(800, 480);
 
         double last = now_us(), fps_since = last;
@@ -248,12 +377,14 @@ int main() {
             const double frame_us = std::min(t - last, 100'000.0);
             last = t;
             controls.update();
+            controls.touch(bottom.state());
             game.update(static_cast<std::uint32_t>(frame_us));
             const double t_updated = now_us();
             if (game.quit_requested()) break;
             game.render(screen);
             const double t_rendered = now_us();
             ctr::draw_to_top_screen(screen, game.palette());
+            bottom.update(stats);
             gfxFlushBuffers();
             gfxSwapBuffers();
             const double t_presented = now_us();
@@ -266,22 +397,18 @@ int main() {
             // Once a second: the frame rate, the slowest frame and the average
             // time of each part (without the wait for the screen).
             if (t - fps_since >= 1'000'000.0) {
-                std::printf("\x1b[22;1H %4.1f fps, slowest %3.0f ms      \n", frames * 1'000'000.0 / (t - fps_since),
-                            slowest_us / 1000.0);
-                std::printf(" update %4.1f render %4.1f show %4.1f ms  \n", update_us / frames / 1000.0,
-                            render_us / frames / 1000.0, present_us / frames / 1000.0);
-                // Where things stand: in a menu or in play, the map, the player.
-                const Item* player = game.world().get(1);
-                std::printf(" %s map %3d          \n", game.mouse_in_play() ? "play" : "menu",
-                            game.world().current_map());
-                std::printf(" player %5d,%5d,%3d          \n", player ? player->x : 0, player ? player->y : 0,
-                            player ? player->z : 0);
+                char line[96];
+                std::snprintf(line, sizeof line, "%4.1f fps max %3.0f u%4.1f d%4.1f s%4.1f",
+                              frames * 1'000'000.0 / (t - fps_since), slowest_us / 1000.0,
+                              update_us / frames / 1000.0, render_us / frames / 1000.0, present_us / frames / 1000.0);
+                stats = line;
                 frames = 0;
                 fps_since = t;
                 update_us = render_us = present_us = slowest_us = 0;
             }
         }
     } catch (const std::exception& e) {
+        consoleInit(GFX_BOTTOM, nullptr);
         std::printf("\nerror: %s\n", e.what());
         wait_for_start();
     }
