@@ -49,7 +49,8 @@ as clips in its weapon's box). Each slot keeps its place.
 A tap on a weapon or item makes it active with the game's own keys: next weapon (W)
 or previous item (I), one every other frame until it is active, at most 30 (the game
 ignores them while the player is busy). Previous item because going up the items never
-reaches the last slot (`player_commands.hpp`). The buttons are unchanged.
+reaches the last slot (`player_commands.hpp`). The taps replace the buttons for next
+weapon (Y) and previous / next item (D-pad left / right), which are left unbound.
 
 ## Cost
 

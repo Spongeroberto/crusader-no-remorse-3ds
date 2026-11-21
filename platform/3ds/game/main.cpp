@@ -54,11 +54,13 @@ const PadAction* action(int id) { return &kPadActions[static_cast<std::size_t>(i
 // AZERTY alike (unlike Y and J).
 constexpr PadAction kYes = {"YES", 0x18, false, 'o'};
 
-// In play. The circle pad moves (see Controls::move).
+// In play. The circle pad moves (see Controls::move). Weapons and items are
+// picked on the touch screen (Controls::touch), so Y and D-pad left / right
+// are free.
 const std::array<const PadAction*, kControlCount> kPlay = {
-    action(kPadFire), action(kPadJump), action(kPadSelect), action(kPadNextWeapon),
+    action(kPadFire), action(kPadJump), action(kPadSelect), nullptr,
     action(kPadCrouch), action(kPadShift), action(kPadMenu), action(kPadConfirm),
-    action(kPadUseItem), action(kPadMedkit), action(kPadPrevItem), action(kPadNextItem),
+    action(kPadUseItem), action(kPadMedkit), nullptr, nullptr,
 };
 // In menus and screens: the D-pad (or the circle pad) is the arrows, A is
 // Enter, B and START are Escape (back, or "no"), X is "yes" and Y is Tab
@@ -239,14 +241,13 @@ private:
 
 // The controls in menus, in the font of the movie subtitles (light, for a
 // dark background).
-constexpr std::array<const char*, 14> kHelp = {
+constexpr std::array<const char*, 13> kHelp = {
     "Crusader: No Remorse (3DS port)",
     "Circle pad   move",
     "A  fire           B  jump",
-    "X  select         Y  next weapon",
+    "X  select object",
     "L  kneel          R  run (hold)",
-    "D-pad  use item, medkit,",
-    "       previous / next item",
+    "D-pad up  use item   down  medkit",
     "SELECT  use selected   START  menu",
     "Touch the equipment to pick a",
     "weapon or item",
