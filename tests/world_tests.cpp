@@ -1774,7 +1774,82 @@ void test_casings() {
     CHECK(count(marks, MarkKind::Casing) + count(marks, MarkKind::Shell) == 0 && count(marks, MarkKind::Bullet) == 1);
 }
 
+// Stereoscopic 3D: the depth written with a frame, through a window of the
+// screen too, flat or as a box; colours as without depth, translucent
+// pixels keep the depth they cover.
+void test_stereo_depth() {
+    CHECK(Surface8::depth_byte(0) == Surface8::kDepthScreen);
+    CHECK(Surface8::depth_byte(96) == Surface8::kDepthScreen + 48);
+    CHECK(Surface8::depth_byte(-96) == Surface8::kDepthScreen - 48);
+    CHECK(Surface8::depth_byte(1000) == 255 && Surface8::depth_byte(-1000) == 1);
+
+    // A 4 x 1 frame of raw colours 20, 9 (translucent), 21, 22.
+    static const std::uint8_t rle[] = {0, 4, 20, 9, 21, 22};
+    ShapeFrame frame;
+    frame.width = 4;
+    frame.height = 1;
+    frame.rle = rle;
+    frame.lines = {0};
+    // XFORMPAL.DAT entry 0: 256 unread bytes, then colour -> table, tables.
+    std::vector<std::uint8_t> entry(2304, 0xFF);
+    entry[256 + 9] = 1;
+    for (int c = 0; c < 256; ++c) entry[256 + 256 + c] = 77;
+    const XformTable xform = XformTable::parse(entry);
+
+    for (const bool half : {false, true}) {
+        Surface8 plain = half ? Surface8::half(16, 8) : Surface8(16, 8);
+        Surface8 deep = half ? Surface8::half(16, 8) : Surface8(16, 8);
+        std::vector<std::uint8_t> depth;
+        deep.attach_depth(depth);
+        CHECK(depth.size() == deep.pixels.size());
+        Surface8 window = Surface8::window(deep, 4, 2, 8, 4);
+        window.set_depth(40);
+        frame.draw(window, 0, 0, false, &xform);
+        Surface8 plain_window = Surface8::window(plain, 4, 2, 8, 4);
+        frame.draw(plain_window, 0, 0, false, &xform);
+        CHECK(plain.pixels == deep.pixels);
+        const int s = half ? 2 : 1;
+        const std::uint8_t at40 = Surface8::depth_byte(40);
+        const std::uint8_t* d = deep.depth_row(2 / s);
+        CHECK(d[4 / s] == at40);                                   // colour 20
+        if (!half) CHECK(d[5] == Surface8::kDepthScreen);          // 9, translucent
+        CHECK(d[6 / s] == at40);                                   // 21
+        if (!half) CHECK(d[7] == at40 && d[8] == Surface8::kDepthScreen);
+        CHECK(deep.depth_row(0)[4 / s] == Surface8::kDepthScreen);  // above: untouched
+    }
+
+    // As a box 30 tall at height 10, anchored at (20, 50): a pixel 4 up and
+    // 2 to either side of the anchor is 4 - 1 = 3 up a front face; one 40
+    // up is on the top, at 30.
+    static const std::uint8_t dot[] = {0, 1, 20};
+    ShapeFrame pixel;
+    pixel.width = 1;
+    pixel.height = 1;
+    pixel.rle = dot;
+    pixel.lines = {0};
+    Surface8 screen(64, 64);
+    std::vector<std::uint8_t> depth;
+    screen.attach_depth(depth);
+    screen.set_depth(10, 30);
+    const auto draw_at = [&](int x, int y) {  // the pixel at (x, y), anchored at (20, 50)
+        pixel.xoff = 20 - x;
+        pixel.yoff = 50 - y;
+        pixel.draw(screen, 20, 50);
+    };
+    draw_at(22, 46);
+    draw_at(18, 46);
+    draw_at(20, 50);
+    draw_at(20, 10);
+    draw_at(30, 50);  // 10 to the right on the bottom row: below the box's edge, at its bottom
+    CHECK(screen.depth_row(46)[22] == Surface8::depth_byte(10 + 3));
+    CHECK(screen.depth_row(46)[18] == Surface8::depth_byte(10 + 3));
+    CHECK(screen.depth_row(50)[20] == Surface8::depth_byte(10));
+    CHECK(screen.depth_row(10)[20] == Surface8::depth_byte(10 + 30));
+    CHECK(screen.depth_row(50)[30] == Surface8::depth_byte(10));
+}
+
 int main() {
+    test_stereo_depth();
     test_impact_marks();
     test_blood_marks();
     test_casings();

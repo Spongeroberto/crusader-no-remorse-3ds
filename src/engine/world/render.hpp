@@ -146,9 +146,13 @@ std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes,
                                          int h, RenderStats* stats = nullptr);
 
 // Items of translucent shapes are blended through `xform` (opaque without it).
-// `after` runs right after each item is drawn (overlays drawn with it).
+// `after` runs right after each item is drawn (overlays drawn with it). With
+// a depth attached to `screen` (stereoscopic 3D), each item is drawn as its
+// box at its height above `screen_z` (Surface8::set_depth), and what `after`
+// draws with it flat at the middle of that box.
 void draw_display_list(Surface8& screen, const std::vector<DrawItem>& list, const XformTable* xform = nullptr,
-                       const std::function<void(Surface8&, const DrawItem&)>& after = {});
+                       const std::function<void(Surface8&, const DrawItem&)>& after = {},
+                       std::int32_t screen_z = 0);
 
 // Indices (in draw order) of the items with an opaque pixel at screen (x, y).
 std::vector<std::size_t> pick(const std::vector<DrawItem>& list, int x, int y);

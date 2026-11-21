@@ -23,6 +23,7 @@
 #include <exception>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 // The picture is drawn by the CPU and needs only a few MiB the GPU can read;
 // the rest of the 64 MiB goes to the ordinary heap.
@@ -507,6 +508,10 @@ int main() {
         BottomScreen bottom(game);
         std::string stats;
         Surface8 screen = Surface8::half(800, 480);
+        // Stereoscopic 3D, on while the 3D slider is up only, so 2D costs
+        // nothing: the depth of each pixel is written as the scene is drawn,
+        // and the right eye is made from the picture and its depth.
+        std::vector<std::uint8_t> depth, right_eye;
 
         double last = now_us(), fps_since = last;
         int frames = 0;
@@ -522,9 +527,16 @@ int main() {
             game.update(static_cast<std::uint32_t>(frame_us));
             const double t_updated = now_us();
             if (game.quit_requested()) break;
+            const float slider = osGet3DSliderState();
+            if ((slider > 0) != screen.has_depth()) {
+                if (slider > 0) screen.attach_depth(depth);
+                else screen.detach_depth();
+                gfxSet3D(slider > 0);
+            }
             game.render(screen);
             const double t_rendered = now_us();
             ctr::draw_to_top_screen(screen, game.palette());
+            if (slider > 0) ctr::draw_right_eye(screen, game.palette(), slider, right_eye);
             bottom.update(stats);
             gfxFlushBuffers();
             gfxSwapBuffers();
