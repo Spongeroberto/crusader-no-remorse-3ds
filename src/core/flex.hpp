@@ -53,6 +53,9 @@ private:
 };
 
 std::vector<std::uint8_t> read_file(const std::filesystem::path& path);
+// Writes `bytes` to `path`.tmp then renames it over `path`, so a crash leaves
+// either file whole. Throws when it cannot.
+void write_file_replacing(const std::filesystem::path& path, std::span<const std::uint8_t> bytes);
 
 
 }  // namespace crusader

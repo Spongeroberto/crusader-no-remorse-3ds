@@ -501,6 +501,9 @@ int main() {
         // SHAPES.FLX (40 MiB) does not fit beside the rest: read per map.
         Game game(data, fs::path(kRoot) / "SAVEGAME", {}, true);
         game.set_config_file(fs::path(kRoot) / "CRUSADER.CFG");
+        // Writing a save to the SD card takes about 150 ms: the autosave's is
+        // written on a thread so play does not stop for it.
+        game.set_background_saves(true);
         // The camera follows the player smoothly instead of jumping when he
         // nears the edge of the view, and the circle pad moves in screen
         // directions (keypad keys, AvatarMover's directional mode).

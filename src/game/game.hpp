@@ -9,6 +9,7 @@
 // time, then render(), once per presented frame.
 
 #include "core/anim_dat.hpp"
+#include "core/background_writer.hpp"
 #include "core/data_files.hpp"
 #include "core/game_config.hpp"
 #include "core/dtable.hpp"
@@ -137,6 +138,15 @@ public:
     void request_autosave();
     // The floppy disk is on screen.
     bool autosave_icon_shown() const { return autosave_icon_us_ > 0; }
+    // Port only, for slow media (the 3DS SD card): the autosave's file is
+    // written on a thread of its own instead of during the frame. The game
+    // is still saved, into memory, when autosave() is called; anything that
+    // reads or writes saves first waits for that file (finish_saves).
+    void set_background_saves(bool on);
+    // Returns once a save written in the background is on disk.
+    void finish_saves() {
+        if (save_writer_) save_writer_->wait();
+    }
 
     // Port only: where the saved games are read and written (data/SAVEGAME
     // by default); the slot names are read again from there.
@@ -469,6 +479,9 @@ private:
     std::string data_language_;
     std::span<const std::uint16_t> intrinsic_numbering_;  // of the usecode (intrinsic_numbering.hpp)
     std::filesystem::path save_dir_;  // data_/SAVEGAME unless set_save_dir
+    std::unique_ptr<BackgroundWriter> save_writer_;  // set_background_saves
+    // The saved game save_game writes, as bytes.
+    std::vector<std::uint8_t> saved_game(int slot);
     GameConfig config_;
     std::filesystem::path config_file_;
     std::unique_ptr<Audio> audio_;  // kept across loads, as the sound driver

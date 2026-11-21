@@ -1,6 +1,7 @@
 // Game configuration parsing and writing, data detection, language files,
 // Flex files read on request (no game data).
 
+#include "core/background_writer.hpp"
 #include "core/data_files.hpp"
 #include "core/data_info.hpp"
 #include "core/flex.hpp"
@@ -505,8 +506,39 @@ void check_languages() {
     check(GameConfig::parse("Language = PT-BR\r\n").language == "pt-br", "config language in lower case");
 }
 
+void check_background_writer() {
+    const auto dir = std::filesystem::temp_directory_path() / "crusader_background_writer";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const auto a = dir / "A", b = dir / "B";
+    {
+        BackgroundWriter writer;
+        for (std::uint8_t i = 0; i < 50; ++i) writer.write(a, std::vector<std::uint8_t>(1000, i));
+        writer.write(b, {1, 2, 3});
+        writer.wait();
+        // The last write of a path wins; another path is written too.
+        const auto got = read_file(a);
+        check(got.size() == 1000 && got.front() == 49 && got.back() == 49, "background writer: last write wins");
+        check(read_file(b) == std::vector<std::uint8_t>{1, 2, 3}, "background writer: second file");
+        check(!std::filesystem::exists(dir / "A.tmp"), "background writer: no file left behind");
+        // Queued writes are finished when the writer goes.
+        writer.write(b, {4});
+    }
+    check(read_file(b) == std::vector<std::uint8_t>{4}, "background writer: queue written on destruction");
+    // A failure is reported, not thrown, and the writer goes on.
+    {
+        BackgroundWriter writer;
+        writer.write(dir / "no_such_dir" / "C", {1});
+        writer.write(a, {7});
+        writer.wait();
+    }
+    check(read_file(a) == std::vector<std::uint8_t>{7}, "background writer: goes on after a failure");
+    std::filesystem::remove_all(dir);
+}
+
 int main() {
     check_config();
+    check_background_writer();
     check_flex_file();
     check_iso();
     check_data_info();
