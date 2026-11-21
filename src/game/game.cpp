@@ -1372,7 +1372,7 @@ void Game::open_menu(bool no_game) {
                                 (data_version_.empty() ? std::string(tr("UNKNOWN")) : "V" + data_version_) + " " +
                                 (data_language_.empty() ? std::string(tr("UNKNOWN LANGUAGE")) : data_language_),
                             auto_save_name_function(),
-                            christmas_ && (!audio_ || audio_->music.christmas_allowed())},
+                            christmas_ && (!audio_ || audio_->music.christmas_allowed()), menu_quit_shown_},
         menu_shared_, no_game);
     auto p = std::make_unique<ModalProcess>();
     menu_process_ = p.get();

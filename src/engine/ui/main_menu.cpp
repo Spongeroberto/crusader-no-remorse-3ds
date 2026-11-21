@@ -38,6 +38,8 @@ MainMenu::MainMenu(const Resources& res, Shared& shared, bool no_game)
       shared_(&shared),
       selected_(&shared.selected),
       no_game_(no_game) {
+    // The selection outlives the menu: a platform without "quit" never starts on it.
+    if (!res_.quit_shown && *selected_ == kQuit) *selected_ = kCredits;
     for (int i = 0; i < kButtons; ++i) {
         const Shape* s = gumps_->get(static_cast<std::uint16_t>(kFirstButton + i));
         const int w = s && !s->frames().empty() ? s->frames()[0].width : 1;
@@ -96,6 +98,7 @@ void MainMenu::draw(Surface8& screen) const {
     }
     if (res_.christmas_hat) draw_christmas_hat(screen, false);
     for (int i = 0; i < kButtons; ++i) {
+        if (i == kQuit && !res_.quit_shown) continue;
         const Shape* s = gumps_->get(static_cast<std::uint16_t>(kFirstButton + i));
         const std::size_t frame = i == *selected_ ? 1 : 0;
         if (s && frame < s->frames().size()) s->frames()[frame].draw(screen, buttons_[i].x0, buttons_[i].y0);
@@ -174,6 +177,7 @@ void MainMenu::mouse_down(int x, int y) {
     }
     if (result_ || captured_ >= 0) return;
     for (int i = 0; i < kButtons; ++i) {
+        if (i == kQuit && !res_.quit_shown) continue;
         if (buttons_[i].contains(x, y)) {
             captured_ = i;
             select(i);
@@ -220,7 +224,7 @@ void MainMenu::mouse_up(int x, int y) {
 void MainMenu::activate(int i) {
     switch (i) {
     case kQuit:
-        result_ = i;
+        if (res_.quit_shown) result_ = i;
         break;
     case kBack:
         if (!no_game_) result_ = i;

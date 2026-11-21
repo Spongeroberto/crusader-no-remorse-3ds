@@ -43,6 +43,10 @@
 //
 // Port addition (@orig none): from 24 to 31 December, a Christmas hat on the
 // Silencer, drawn over the background (christmas_hat.hpp).
+//
+// Port addition (@orig none): a platform that closes the game from its own
+// system menu (the 3DS's HOME button) leaves "quit" out: the button is not
+// drawn, can't be selected by keys or the mouse, and never closes the menu.
 
 #include "core/surface.hpp"
 #include "engine/ui/credits.hpp"
@@ -98,6 +102,8 @@ public:
         std::function<std::string()> auto_save_name;
         // Port addition: the Christmas hat on the background.
         bool christmas_hat = false;
+        // Port addition: false leaves the "quit" button out.
+        bool quit_shown = true;
     };
     MainMenu(const Resources& res, Shared& shared, bool no_game);
 
@@ -135,7 +141,9 @@ public:
     const Rect& button(int i) const { return buttons_[i]; }
 
 private:
-    void select(int i) { *selected_ = i; }
+    void select(int i) {
+        if (i != kQuit || res_.quit_shown) *selected_ = i;
+    }
     void activate(int i);
 
     void after_sub_screen();

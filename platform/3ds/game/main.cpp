@@ -377,7 +377,7 @@ private:
 // The controls in menus, in the font of the movie subtitles (light, for a
 // dark background).
 // At most 14 lines: the 15th would reach the frame times at the bottom.
-constexpr std::array<const char*, 14> kHelp = {
+constexpr std::array<const char*, 13> kHelp = {
     "Crusader: No Remorse (3DS port)",
     "Circle pad  move, far: run",
     "A fire  B jump  X select  Y use",
@@ -391,7 +391,6 @@ constexpr std::array<const char*, 14> kHelp = {
     "Menus: D-pad or circle pad,",
     "  A enter, B back / no, X yes,",
     "  Y weapons / ammo (shop)",
-    "START + SELECT  quit",
 };
 static_assert(kHelp.size() <= 14);
 constexpr int kHelpFont = 4;
@@ -501,6 +500,7 @@ int main() {
         game.start_up();
         game.set_cursor_drawn(false);  // no pointer: menus are played with keys
         game.set_status_bar_drawn(false);  // the bottom screen shows it
+        game.set_menu_quit_shown(false);   // HOME closes the game
         Controls controls(game);
         BottomScreen bottom(game);
         std::string stats;
@@ -511,7 +511,6 @@ int main() {
         double update_us = 0, render_us = 0, present_us = 0, slowest_us = 0;
         while (aptMainLoop()) {
             hidScanInput();
-            if ((hidKeysHeld() & (KEY_START | KEY_SELECT)) == (KEY_START | KEY_SELECT)) break;
             const double t = now_us();
             // A long stall (loading, the system menu) is not played as game time.
             const double frame_us = std::min(t - last, 100'000.0);

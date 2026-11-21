@@ -197,6 +197,9 @@ public:
     // Port addition: a platform that shows the equipment on a second screen
     // (the 3DS) leaves the status bar out of the view.
     void set_status_bar_drawn(bool drawn) { status_bar_drawn_ = drawn; }
+    // Port addition: a platform closed from its own system menu (the 3DS's
+    // HOME button) leaves "quit" out of the main menu.
+    void set_menu_quit_shown(bool shown) { menu_quit_shown_ = shown; }
     // Controller screen (options): it waits for a button press to bind, which
     // the platform gives with pad_button() instead of sending its key.
     bool waiting_for_pad() const;
@@ -437,6 +440,7 @@ private:
     MouseCursor cursor_;
     bool cursor_drawn_ = true;
     bool status_bar_drawn_ = true;
+    bool menu_quit_shown_ = true;
     std::filesystem::path data_;
     std::filesystem::path mod_;  // level editor files that replace the data's
     int start_map_ = 1;
