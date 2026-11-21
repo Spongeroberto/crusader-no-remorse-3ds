@@ -305,10 +305,12 @@ public:
     // movie is over, update() plays it instead of running the kernel, and
     // render() shows it.
     void play_movie(const std::string& name, MovieKind kind);
-    // Port: movies drawn twice as big whatever "bigvideo" says, for a screen
-    // shown at half resolution (Surface8::half, the 3DS): a doubled movie
-    // then shows every one of its pixels instead of half of them.
-    void set_movies_doubled(bool on) { movies_doubled_ = on; }
+    // Port: on a screen at half resolution (Surface8::half, the 3DS), a
+    // cutscene (not an overlay), once its fade is over, fills the screen's
+    // width, scaled from its own pixels, the top and bottom cut off (black
+    // bands for one wider than the screen); its subtitles go over the bottom
+    // of the picture. Off: the 640 x 480 screen, every other pixel kept.
+    void set_movies_fill_screen(bool on) { movies_fill_screen_ = on; }
     const MoviePlayer* movie() const { return movie_.get(); }
 
     // ComputerGump::I_readComputer (computer_gump.hpp): the text on the
@@ -439,6 +441,7 @@ private:
     Surface8 full_screen_;  // full-size scratch for a half-resolution screen outside play
     int ui_x_ = 0, ui_y_ = 0;
     void update_movie(std::uint32_t elapsed_us);
+    void draw_movie_filling(Surface8& screen) const;
     void end_movie();
     void save_config();
     void draw_autosave_icon(Surface8& screen);
@@ -526,7 +529,7 @@ private:
     // Player field +0xC2: the movie resumes the colour cycling when it ends
     // (DS:5FFE clear when it started).
     bool movie_resumes_cycle_ = true;
-    bool movies_doubled_ = false;  // set_movies_doubled
+    bool movies_fill_screen_ = false;  // set_movies_fill_screen
     // Port addition (issue #24): the keys that stop a movie (Escape, Space,
     // Enter) already held when it started, ignored until they are released.
     std::array<bool, 3> movie_keys_held_at_start_{};

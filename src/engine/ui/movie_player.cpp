@@ -13,7 +13,7 @@ constexpr int kScreenWidth = 640;
 constexpr int kScreenHeight = 480;
 constexpr int kFrameRate = 15;  // ticks per strip per second (1468:3A3D)
 constexpr std::uint16_t kFrameSmall = 0x34, kFrameWide = 0x35, kFrameTall = 0x33;
-constexpr int kSubtitleX = 20, kSubtitleWidth = 601, kSubtitleHeight = 16, kSubtitleLowest = 470;
+constexpr int kSubtitleX = 20, kSubtitleLowest = 470;
 
 bool is_digit(char c) { return c >= '0' && c <= '9'; }
 
@@ -252,13 +252,15 @@ void MoviePlayer::show_subtitle() {
     subtitle_wait_ = e ? e->delay : 0;
     if (e && e->text) {
         TextWriter writer(*fonts_, kSubtitleFont);
-        writer.print(strip, (kSubtitleWidth - 1 - e->width) / 2, 2, *e->text);
+        writer.print(strip, (kSubtitleWidth - 1 - e->width) / 2, kSubtitleTextY, *e->text);
     }
+    subtitle_text_ = e && e->text ? &*e->text : nullptr;
     const int height = movie_.height() * (doubled_ ? 2 : 1);
     const int top = y_ + height + 10 < kSubtitleLowest ? y_ + height + 8 : kSubtitleLowest;
     for (int y = 0; y < strip.height && top + y < screen_.height; ++y) {
         std::copy_n(strip.row(y), std::min(strip.width, screen_.width - kSubtitleX), screen_.row(top + y) + kSubtitleX);
     }
+
 }
 
 // 1468:2869.

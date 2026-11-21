@@ -91,6 +91,8 @@ public:
     static constexpr int kSubtitleFont = 4;
     static constexpr int kFadeRate = 40;
     static constexpr int kOverlayStrips = 13;
+    static constexpr int kSubtitleWidth = 601, kSubtitleHeight = 16;
+    static constexpr int kSubtitleTextY = 2;  // where the text goes in its strip
     // Port: audio chunks read ahead of those queued (15 a second).
     static constexpr std::size_t kAudioLead = 15;
 
@@ -111,6 +113,13 @@ public:
     const Palette& kept_palette() const { return kept_palette_; }
     // Frames decoded so far (DS:00E8 of the player).
     int frame() const { return frame_; }
+    // Port, for screens that show the movie on its own (Game's
+    // set_movies_fill_screen): true once the fade is over, until the end;
+    // the movie's last frame at its own size; the text of the subtitle on
+    // screen, null when none.
+    bool playing() const { return phase_ == Phase::kPlay && !finished_; }
+    const Surface8& picture() const { return frame_buffer_; }
+    const std::string* subtitle() const { return subtitle_text_; }
 
     // True once, when the fade is over and the movie starts: the caller then
     // stops the sound effects and pauses the music (not for an overlay).
@@ -177,6 +186,7 @@ private:
 
     std::size_t subtitle_ = 0;   // next entry
     std::int64_t subtitle_wait_ = 0;  // DS:00F2
+    const std::string* subtitle_text_ = nullptr;  // in subtitles_
 };
 
 }  // namespace crusader

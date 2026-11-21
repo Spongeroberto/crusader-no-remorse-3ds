@@ -1125,7 +1125,7 @@ void Game::start_movie(const std::string& name, MovieKind kind, Surface8 screen)
     if (config_.subtitles && kind != MovieKind::kOverlay) {
         subtitles = load_movie_subtitles(files_.find(base + ".TXT"), fonts_, MoviePlayer::kSubtitleFont);
     }
-    movie_ = std::make_unique<MoviePlayer>(std::move(*movie), kind, std::move(subtitles), config_.big_video || movies_doubled_,
+    movie_ = std::make_unique<MoviePlayer>(std::move(*movie), kind, std::move(subtitles), config_.big_video,
                                            std::move(screen), world_->state.screen_palette, gumps_, fonts_);
     // 1468:3ABC: the colour cycling pauses.
     world_->state.cycle_paused = true;
@@ -1978,6 +1978,58 @@ void Game::zoom_overlay(Surface8& screen) const {
     for (int y = 0; y < h; ++y) std::copy_n(full_screen_.row(y0 + y) + x0, w, screen.row(to_y + y) + to_x);
 }
 
+// Port (set_movies_fill_screen): the movie's picture scaled to the stored
+// width of `screen` (nearest pixel), centred, so a 4:3 movie loses its top
+// and bottom on a 5:3 screen. The subtitle goes over the bottom of the
+// picture at the font's own size (halved, its 1-pixel strokes would be
+// lost), in black strips as in the original, cut into lines that fit.
+// @orig none
+void Game::draw_movie_filling(Surface8& screen) const {
+    const Surface8& picture = movie_->picture();
+    const int width = screen.stored_width(), height = screen.stored_height();
+    const int scaled = picture.height * width / picture.width;  // the picture's height on screen
+    const int top = (height - scaled) / 2;                       // negative when cut off
+    std::vector<int> column(static_cast<std::size_t>(width));
+    for (int x = 0; x < width; ++x) column[static_cast<std::size_t>(x)] = x * picture.width / width;
+    for (int y = 0; y < height; ++y) {
+        std::uint8_t* out = screen.row(y);
+        const int sy = y - top;
+        if (sy < 0 || sy >= scaled) {
+            std::fill_n(out, width, std::uint8_t{0});
+            continue;
+        }
+        const std::uint8_t* in = picture.row(sy * picture.height / scaled);
+        for (int x = 0; x < width; ++x) out[x] = in[column[static_cast<std::size_t>(x)]];
+    }
+
+    const std::string* text = movie_->subtitle();
+    if (!text) return;
+    TextWriter writer(fonts_, MoviePlayer::kSubtitleFont);
+    constexpr int kMargin = 4;
+    std::vector<std::string> lines(1);
+    std::string word;
+    const auto place = [&] {
+        if (word.empty()) return;
+        const std::string joined = lines.back().empty() ? word : lines.back() + ' ' + word;
+        if (lines.back().empty() || writer.measure(joined).width <= width - 2 * kMargin) lines.back() = joined;
+        else lines.push_back(word);
+        word.clear();
+    };
+    for (const char c : *text) {
+        if (c == ' ' || c == '\n') place();
+        else word += c;
+    }
+    place();
+    constexpr int kLine = MoviePlayer::kSubtitleHeight - 2;  // strips overlap by their empty rows
+    Surface8 strip(width, kLine * static_cast<int>(lines.size()) + 2, 0);
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        const int line_width = writer.measure(lines[i]).width;
+        writer.print(strip, (width - line_width) / 2, MoviePlayer::kSubtitleTextY + kLine * static_cast<int>(i), lines[i]);
+    }
+    const int y0 = std::max(0, height - strip.height - kMargin);
+    for (int y = 0; y < strip.height && y0 + y < height; ++y) std::copy_n(strip.row(y), width, screen.row(y0 + y));
+}
+
 // @orig 1188:19C1
 void Game::render(Surface8& screen, RenderStats* stats) {
     // Port addition: with a depth attached (stereoscopic 3D), all is at the
@@ -1988,6 +2040,11 @@ void Game::render(Surface8& screen, RenderStats* stats) {
     // in play. Movies, menus, messages and UI screens, some of which use the
     // pixels directly, are drawn at full size and every other pixel kept:
     // slower, but the same picture.
+    if (screen.half_resolution() && movie_ && movies_fill_screen_ && movie_->kind() != MovieKind::kOverlay &&
+        movie_->playing()) {
+        draw_movie_filling(screen);
+        return;
+    }
     if (screen.half_resolution() && (movie_ || modal())) {
         if (full_screen_.width != screen.width || full_screen_.height != screen.height) {
             full_screen_ = Surface8(screen.width, screen.height);
