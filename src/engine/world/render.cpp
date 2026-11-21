@@ -128,8 +128,8 @@ enum class Order { kNone, kOtherFirst, kThisFirst };
 // corners, the smaller first. Equal sums leave them unordered. No shape
 // property (roof, land, flat, translucent) takes part.
 // @orig 11A0:0000
-Order compare(const DrawItem& self, const DrawItem& other) {
-    const SortBox a = sort_box(self), b = sort_box(other);
+// The boxes are computed once per item by the caller (sort_box).
+Order compare(const SortBox& a, const SortBox& b) {
     const bool overlap = a.x - a.z - a.dx - a.dz < b.x - b.z && b.x - b.z - b.dx - b.dz < a.x - a.z &&
                          a.y - a.z - a.dy - a.dz < b.y - b.z && b.y - b.z - b.dy - b.dz < a.y - a.z &&
                          a.x - a.y - a.dx < b.x - b.y + b.dy && b.x - b.y - b.dx < a.x - a.y + a.dy;
@@ -153,7 +153,7 @@ Order compare(const DrawItem& self, const DrawItem& other) {
 // @orig 1198:08A0
 std::optional<bool> draw_before(const DrawItem& a, const DrawItem& b) {
     if (!screen_overlap(a, b)) return std::nullopt;
-    switch (compare(a, b)) {
+    switch (compare(sort_box(a), sort_box(b))) {
     case Order::kThisFirst: return true;
     case Order::kOtherFirst: return false;
     case Order::kNone: break;
@@ -235,6 +235,9 @@ std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes,
         return a.item->id < b.item->id;
     });
     const std::size_t n = items.size();
+    // Each item's box, once: the pair tests below use each one many times.
+    std::vector<SortBox> boxes(n);
+    for (std::size_t i = 0; i < n; ++i) boxes[i] = sort_box(items[i]);
     // The constraints as (item, item to draw before it), in the order found,
     // then grouped by item in one array (before_start[i] .. before_start[i + 1]
     // in `before`), each item's list keeping that order, which the DFS below
@@ -243,7 +246,7 @@ std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes,
     for (std::size_t i = 0; i < n; ++i) {
         for (std::size_t j = i + 1; j < n && items[j].left < items[i].right; ++j) {
             if (!screen_overlap(items[i], items[j])) continue;
-            const Order order = compare(items[i], items[j]);
+            const Order order = compare(boxes[i], boxes[j]);
             const auto a = static_cast<std::uint32_t>(i), b = static_cast<std::uint32_t>(j);
             if (order == Order::kThisFirst) edges.emplace_back(b, a);
             else if (order == Order::kOtherFirst) edges.emplace_back(a, b);
