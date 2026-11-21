@@ -50,11 +50,11 @@
 // back; the cursor shown again.
 //
 // Not reproduced: the debug view of the read buffer (DS:0905); the read
-// buffer itself (the port has the whole file in memory, so the playback
-// never waits for the disk); the timed processes, which keep running in
-// the original during a movie; the sound is one buffer of every audio chunk
-// instead of a ring of 8 chunks filled as the movie goes (the same as long
-// as the timing holds).
+// buffer itself (the port reads each video chunk from the file when its
+// first strip is drawn); the timed processes, which keep running in the
+// original during a movie; the sound is one buffer as long as every audio
+// chunk instead of a ring of 8 chunks, filled from the file a second ahead
+// of the chunks queued (the same as long as the timing holds).
 
 #include "core/avi_movie.hpp"
 #include "core/font.hpp"
@@ -66,6 +66,8 @@
 
 #include <cstdint>
 #include <functional>
+#include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -89,6 +91,8 @@ public:
     static constexpr int kSubtitleFont = 4;
     static constexpr int kFadeRate = 40;
     static constexpr int kOverlayStrips = 13;
+    // Port: audio chunks read ahead of those queued (15 a second).
+    static constexpr std::size_t kAudioLead = 15;
 
     // `screen`: the picture on screen when the movie starts (game view and
     // status bar, without the cursor); `dac`: the palette on screen.
@@ -112,8 +116,11 @@ public:
     // stops the sound effects and pauses the music (not for an overlay).
     bool take_playback_start();
     // The movie's sound: signed 8-bit at AviMovie::kAudioRate, every audio
-    // chunk in order. take_sound_start() is true once, when it should start.
-    const std::vector<std::int8_t>& sound() const { return sound_; }
+    // chunk in order, filled as the movie plays (silent where not read yet;
+    // its size never changes). take_sound_start() is true once, when it
+    // should start. Shared, so the mixer can finish reading it after the
+    // player is gone.
+    std::shared_ptr<const std::vector<std::int8_t>> sound() const { return sound_; }
     bool take_sound_start();
 
 private:
@@ -125,6 +132,7 @@ private:
     void decode(int strip);
     bool next_chunk();
     bool queue_audio();
+    void fill_audio(std::size_t count);
     void show_subtitle();
 
     AviMovie movie_;
@@ -154,7 +162,18 @@ private:
     bool sound_started_ = false;      // DS:0EF1
     bool sound_due_ = false;
     bool playback_due_ = false;
-    std::vector<std::int8_t> sound_;
+    std::shared_ptr<std::vector<std::int8_t>> sound_;
+    struct AudioChunk {
+        std::size_t chunk;   // in movie_.chunks()
+        std::size_t sample;  // where it goes in sound_
+    };
+    std::vector<AudioChunk> audio_chunks_;
+    std::size_t audio_chunks_queued_ = 0;  // never wraps, unlike audio_queued_
+    std::size_t audio_filled_ = 0;         // audio chunks read into sound_
+    std::vector<std::uint8_t> read_buffer_;  // an audio chunk being read
+    std::vector<std::uint8_t> video_data_;   // the chunk being decoded
+    std::size_t video_chunk_ = std::numeric_limits<std::size_t>::max();  // its index
+    std::uint32_t video_id_ = 0;  // its header's id
 
     std::size_t subtitle_ = 0;   // next entry
     std::int64_t subtitle_wait_ = 0;  // DS:00F2

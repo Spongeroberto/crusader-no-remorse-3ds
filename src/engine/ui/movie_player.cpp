@@ -64,11 +64,15 @@ MoviePlayer::MoviePlayer(AviMovie movie, MovieKind kind, std::vector<MovieSubtit
     y_ = (kScreenHeight - movie_.height() * scale) / 2;
     // 1468:32CB: subtitles only when their first delay is not 0.
     if (!subtitles_.empty() && subtitles_.front().delay == 0) subtitles_.clear();
-    for (const AviMovie::Chunk& c : movie_.chunks()) {
+    // The sound buffer, silent until fill_audio() reads its chunks.
+    std::size_t samples = 0;
+    for (std::size_t i = 0; i < movie_.chunks().size(); ++i) {
+        const AviMovie::Chunk& c = movie_.chunks()[i];
         if (c.id != AviMovie::kAudioChunk) continue;
-        const std::vector<std::int8_t> samples = movie_audio_samples(movie_.data(c));
-        sound_.insert(sound_.end(), samples.begin(), samples.end());
+        audio_chunks_.push_back({i, samples});
+        samples += c.size;
     }
+    sound_ = std::make_shared<std::vector<std::int8_t>>(samples, std::int8_t{0});
     if (kind_ == MovieKind::kCutscene) {
         fade_.emplace(dac_, greyscale(dac_), 0);
         period_us_ = 1'000'000 / kFadeRate;
@@ -152,8 +156,7 @@ bool MoviePlayer::take_sound_start() { return std::exchange(sound_due_, false); 
 
 bool MoviePlayer::at_video_chunk() const {
     if (chunk_ >= movie_.chunks().size()) return false;
-    const std::uint32_t id = movie_.chunks()[chunk_].id;
-    return id == AviMovie::kFrameChunk || id == AviMovie::kHalfWidthChunk;
+    return AviMovie::is_video(movie_.chunks()[chunk_].id);
 }
 
 // 1468:17B0: the next chunk; the end of the "movi" list stops the movie.
@@ -172,6 +175,8 @@ bool MoviePlayer::next_chunk() {
 bool MoviePlayer::queue_audio() {
     if (chunk_ >= movie_.chunks().size() || movie_.chunks()[chunk_].id != AviMovie::kAudioChunk) return false;
     ++audio_queued_;
+    ++audio_chunks_queued_;
+    fill_audio(audio_chunks_queued_ + kAudioLead);
     if (movie_.audio_initial_frames() < audio_queued_) {
         if (!sound_started_) {
             sound_started_ = true;
@@ -182,12 +187,44 @@ bool MoviePlayer::queue_audio() {
     return true;
 }
 
+// Port: the audio chunks up to the `count`th read from the file into the
+// sound buffer, as signed samples (1468:1EF7 subtracts 0x80 from each byte).
+// The mixer reads the buffer meanwhile, from another thread, behind the
+// chunks written: kAudioLead keeps them a second apart. A chunk that cannot
+// be read stays silent.
+// @orig none
+void MoviePlayer::fill_audio(std::size_t count) {
+    count = std::min(count, audio_chunks_.size());
+    for (; audio_filled_ < count; ++audio_filled_) {
+        const AudioChunk& a = audio_chunks_[audio_filled_];
+        try {
+            const std::span<const std::uint8_t> d = movie_.read(movie_.chunks()[a.chunk], read_buffer_);
+            std::int8_t* out = sound_->data() + a.sample;
+            for (std::size_t i = 0; i < d.size(); ++i) out[i] = static_cast<std::int8_t>(d[i] - 0x80);
+        } catch (const std::exception&) {
+            audio_filled_ = audio_chunks_.size();
+            return;
+        }
+    }
+}
+
 // 1468:1A92: one strip of the current chunk, then onto the screen.
 // @orig 1468:1A92
 void MoviePlayer::decode(int strip) {
-    const AviMovie::Chunk& c = movie_.chunks()[chunk_];
-    const bool half = movie_.rrv() && c.id == AviMovie::kHalfWidthChunk;
-    decode_movie_strip(movie_.data(c), strip, strips_, half, frame_buffer_);
+    // Port: the chunk is read from the file at its first strip, with the id
+    // of its header (the index may have another); a file cut short ends the
+    // movie.
+    if (video_chunk_ != chunk_) {
+        try {
+            movie_.read(movie_.chunks()[chunk_], video_data_, &video_id_);
+        } catch (const std::exception&) {
+            finished_ = true;
+            return;
+        }
+        video_chunk_ = chunk_;
+    }
+    const bool half = movie_.rrv() && video_id_ == AviMovie::kHalfWidthChunk;
+    decode_movie_strip(video_data_, strip, strips_, half, frame_buffer_);
     const int rows = movie_.height() / strips_;
     const int scale = doubled_ ? 2 : 1;
     for (int y = strip * rows; y < (strip + 1) * rows; ++y) {

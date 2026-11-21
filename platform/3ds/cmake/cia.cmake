@@ -11,8 +11,9 @@
 #     PRODUCT_CODE <CTR-H-XXXX>
 #     UNIQUE_ID <0xNNNNN>       distinct per CIA, so builds install side by side
 #     [SYSTEM_MODE 64MB|80MB|96MB]
-#     [DATA <folder>])          game data to bundle in RomFS as romfs:/data,
-#                               movies (FLICS) left out
+#     [DATA <folder>]           game data to bundle in RomFS as romfs:/data,
+#     [MOVIES])                 with the movies (FLICS, about 450 MB) when
+#                               given, else without them
 #
 # A CIA built with DATA holds the user's own copy of the game: it is for their
 # console only. Its file name says so, and build folders are git-ignored.
@@ -39,7 +40,7 @@ macro(crusader_host_tools)
 endmacro()
 
 function(crusader_add_cia name)
-    cmake_parse_arguments(PARSE_ARGV 1 CIA "" "ELF;TITLE;DESCRIPTION;PRODUCT_CODE;UNIQUE_ID;SYSTEM_MODE;DATA" "")
+    cmake_parse_arguments(PARSE_ARGV 1 CIA "MOVIES" "ELF;TITLE;DESCRIPTION;PRODUCT_CODE;UNIQUE_ID;SYSTEM_MODE;DATA" "")
     if(NOT CIA_SYSTEM_MODE)
         set(CIA_SYSTEM_MODE 64MB)
     endif()
@@ -78,18 +79,25 @@ function(crusader_add_cia name)
             message(FATAL_ERROR "${name}: no game data in ${data}")
         endif()
         set(output "${CMAKE_CURRENT_BINARY_DIR}/${name}-PERSONAL-do-not-share.cia")
-        # Everything at the data folder's top level except the movies.
+        # Everything at the data folder's top level, the movies only with MOVIES.
+        if(CIA_MOVIES)
+            set(exclude "")
+        else()
+            set(exclude FLICS)
+        endif()
+        # Rewritten only when it changes: switching MOVIES stages the data again.
+        file(CONFIGURE OUTPUT "${dir}/exclude.txt" CONTENT "${exclude}")
         add_custom_command(
             OUTPUT "${dir}/romfs.stamp"
             COMMAND "${CMAKE_COMMAND}" -E rm -rf "${romfs}"
             COMMAND "${CMAKE_COMMAND}" -E make_directory "${romfs}/data"
-            COMMAND "${CMAKE_COMMAND}" -DSRC=${data} -DDST=${romfs}/data -DEXCLUDE=FLICS
+            COMMAND "${CMAKE_COMMAND}" -DSRC=${data} -DDST=${romfs}/data "-DEXCLUDE=${exclude}"
                     -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/stage_data.cmake"
             # The display list's bound for these shapes (shape_reach.hpp).
             COMMAND "${CRUSADER_SHAPE_REACH_EXE}" "${romfs}/data/STATIC/SHAPES.FLX"
                     "${romfs}/data/STATIC/SHAPES.REACH"
             COMMAND "${CMAKE_COMMAND}" -E touch "${dir}/romfs.stamp"
-            DEPENDS crusader_host_tools
+            DEPENDS crusader_host_tools "${dir}/exclude.txt"
             VERBATIM
         )
     else()
