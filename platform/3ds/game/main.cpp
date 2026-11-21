@@ -18,6 +18,7 @@
 #include <3ds.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <array>
 #include <cstdio>
@@ -41,6 +42,20 @@ using namespace crusader;
 constexpr const char* kRoot = "sdmc:/3ds/crusader";
 
 double now_us() { return static_cast<double>(svcGetSystemTick()) / (SYSCLOCK_ARM11 / 1'000'000.0); }
+
+// The top screen's refreshes since start-up, counted by GSP's event thread.
+std::atomic<u32> g_vblanks{0};
+void count_vblank(void*) { g_vblanks.fetch_add(1, std::memory_order_relaxed); }
+
+// A steady 30 fps: a picture is shown for two refreshes, never one, and the
+// game advances by the refreshes that passed. The kernel ticks at 60 Hz, so
+// every frame then moves the world by exactly two ticks; at a frame rate
+// between 30 and 60 frames alternate between one tick and two, which judders.
+// A frame slower than two refreshes stays up for three (20 fps), still whole
+// ticks. A long stall (loading, the system menu) is not played as game time.
+constexpr u32 kRefreshesPerFrame = 2;
+constexpr u32 kMaxRefreshesPlayed = 6;
+constexpr double kRefreshUs = 1'000'000.0 / 60;  // the kernel's tick, not the screen's 59.83 Hz
 
 // The 3DS controls, each sending one of the original's keys as the PC
 // version's gamepad does: the modifier key first, released last.
@@ -528,15 +543,18 @@ int main() {
         // and the right eye is made from the picture and its depth.
         std::vector<std::uint8_t> depth, right_eye;
 
-        double last = now_us(), fps_since = last;
+        gspSetEventCallback(GSPGPU_EVENT_VBlank0, count_vblank, nullptr, false);
+        u32 last_frame = g_vblanks.load(), last_swap = last_frame;
+        double fps_since = now_us();
         int frames = 0;
         double update_us = 0, render_us = 0, present_us = 0, slowest_us = 0;
         while (aptMainLoop()) {
             hidScanInput();
             const double t = now_us();
-            // A long stall (loading, the system menu) is not played as game time.
-            const double frame_us = std::min(t - last, 100'000.0);
-            last = t;
+            const u32 vblank = g_vblanks.load();
+            const u32 played = std::min(vblank - last_frame, kMaxRefreshesPlayed);
+            last_frame = vblank;
+            const double frame_us = played * kRefreshUs;
             controls.update();
             controls.touch(bottom.state());
             game.update(static_cast<std::uint32_t>(frame_us));
@@ -554,8 +572,14 @@ int main() {
             if (slider > 0) ctr::draw_right_eye(screen, game.palette(), slider, right_eye);
             bottom.update(stats);
             gfxFlushBuffers();
-            gfxSwapBuffers();
             const double t_presented = now_us();
+            // A swap shows at the refresh after it is asked for. The previous
+            // one was asked for at refresh `last_swap` and shown at the next:
+            // asking from refresh last_swap + 2 on keeps it up for two.
+            while (g_vblanks.load() - last_swap < kRefreshesPerFrame) gspWaitForVBlank();
+            gfxSwapBuffers();
+            last_swap = g_vblanks.load();
+            // The buffer just shown is drawn into next: wait until it is off screen.
             gspWaitForVBlank();
             update_us += t_updated - t;
             render_us += t_rendered - t_updated;
