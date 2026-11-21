@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [3ds]
   pull_request:
 
 permissions:
@@ -42,3 +42,25 @@ jobs:
       # Tests that need the game data skip themselves when it is absent.
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
+
+  build-3ds:
+    name: Build (3ds)
+    runs-on: ubuntu-latest
+    # devkitARM, libctru and the 3DS CMake toolchain. No game data: the .3dsx
+    # loads it from sdmc:/3ds/crusader/data at run time.
+    container: devkitpro/devkitarm:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: |
+          cmake -S platform/3ds/game -B build-3ds-game \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$DEVKITPRO/cmake/3DS.cmake"
+      - name: Build
+        run: cmake --build build-3ds-game --parallel
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crusader-3ds
+          path: |
+            build-3ds-game/crusader-3ds.3dsx
+            build-3ds-game/crusader-3ds.smdh
