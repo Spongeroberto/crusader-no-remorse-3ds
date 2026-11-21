@@ -580,15 +580,34 @@ public:
         constexpr int kCellUsecode = 1 << kCellShift;
         for (int cx = 0; cx < kGridSize; ++cx) {
             const int x0 = cx * kCellUsecode, x1 = x0 + kCellUsecode - 1;
-            for (int cy = 0; cy < kGridSize; ++cy) {
+            // Screen place of an item: ((x - y) >> 1, ((x + y) >> 2) - z).
+            // Down a column (cy growing) the cells' x - y falls and x + y
+            // rises, so the cells near the screen are one run of cy: the
+            // first where the left and top tests pass (`low`, false then
+            // true) to the last where the right and bottom ones do (`high`,
+            // true then false). Found by halving instead of testing all 64.
+            const auto low = [&](int cy) {
                 const int y0 = cy * kCellUsecode, y1 = y0 + kCellUsecode - 1;
-                // Screen place of an item: ((x - y) >> 1, ((x + y) >> 2) - z).
-                const int sx_min = ((x0 - y1) >> 1) - view_left, sx_max = ((x1 - y0) >> 1) - view_left;
-                const int sy_min = ((x0 + y0) >> 2) - 0xFF - view_top, sy_max = ((x1 + y1) >> 2) - view_top;
-                if (sx_max <= -reach.right || sx_min >= w + reach.left || sy_max <= -reach.down ||
-                    sy_min >= h + reach.up) {
-                    continue;
-                }
+                return ((x0 - y1) >> 1) - view_left < w + reach.left && ((x1 + y1) >> 2) - view_top > -reach.down;
+            };
+            const auto high = [&](int cy) {
+                const int y0 = cy * kCellUsecode;
+                return ((x1 - y0) >> 1) - view_left > -reach.right &&
+                       ((x0 + y0) >> 2) - 0xFF - view_top < h + reach.up;
+            };
+            int first = 0, end = kGridSize;  // first cy where low() holds
+            while (first < end) {
+                const int mid = (first + end) / 2;
+                if (low(mid)) end = mid;
+                else first = mid + 1;
+            }
+            int last_end = first, top = kGridSize;  // one past the last cy where high() holds
+            while (last_end < top) {
+                const int mid = (last_end + top) / 2;
+                if (high(mid)) last_end = mid + 1;
+                else top = mid;
+            }
+            for (int cy = first; cy < last_end; ++cy) {
                 for (ObjId id : cells_[static_cast<std::size_t>(cx * kGridSize + cy)]) {
                     if (const Item* item = by_id_[id]) fn(*item);
                 }
