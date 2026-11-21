@@ -801,23 +801,47 @@ void test_movies(const std::filesystem::path& data) {
     CHECK(m.width() == 240 && m.height() == 180 && m.codec() == fourcc("RRV2") && m.strips() == 15 &&
           m.frame_count() == 940 && m.colours() == 236 && m.has_audio() && m.audio_initial_frames() == 4);
     Surface8 frame(m.width(), m.height());
+    std::vector<std::uint8_t> chunk;
     int frames = 0;
     for (const AviMovie::Chunk& c : m.chunks()) {
         if (c.id != AviMovie::kFrameChunk && c.id != AviMovie::kHalfWidthChunk) continue;
-        for (int s = 0; s < m.strips(); ++s) decode_movie_strip(m.data(c), s, m.strips(), false, frame);
+        m.read(c, chunk);
+        for (int s = 0; s < m.strips(); ++s) decode_movie_strip(chunk, s, m.strips(), false, frame);
         ++frames;
     }
     const auto [lo, hi] = std::minmax_element(frame.pixels.begin(), frame.pixels.end());
     CHECK(frames == 940 && *lo >= 10 && *hi <= 245);
     // WEC.AVI (RRV1, 5 strips): only half-width frames.
-    const AviMovie wec = AviMovie::load(data / "FLICS/WEC.AVI");
+    const AviMovie wec = AviMovie::load(data / "FLICS/WEC.AVI", false);  // the ids of the headers
     CHECK(wec.strips() == 5 && wec.rrv() && wec.width() == 320);
     Surface8 wide(wec.width(), wec.height());
     for (const AviMovie::Chunk& c : wec.chunks()) {
         if (c.id == AviMovie::kFrameChunk) CHECK(false);
         if (c.id != AviMovie::kHalfWidthChunk) continue;
-        for (int s = 0; s < wec.strips(); ++s) decode_movie_strip(wec.data(c), s, wec.strips(), true, wide);
+        wec.read(c, chunk);
+        for (int s = 0; s < wec.strips(); ++s) decode_movie_strip(chunk, s, wec.strips(), true, wide);
     }
+    // Every movie: the chunk list from the "idx1" index is the one a walk of
+    // the chunk headers finds, but for the frames' type ("00dc" or "00db"),
+    // which read() takes from the header.
+    int movies = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(data / "FLICS")) {
+        if (entry.path().extension() != ".AVI" && entry.path().extension() != ".avi") continue;
+        const AviMovie indexed = AviMovie::load(entry.path());
+        const AviMovie walked = AviMovie::load(entry.path(), false);
+        bool same = indexed.chunks().size() == walked.chunks().size() && !walked.chunks().empty();
+        for (std::size_t i = 0; same && i < walked.chunks().size(); ++i) {
+            const AviMovie::Chunk& a = indexed.chunks()[i];
+            const AviMovie::Chunk& b = walked.chunks()[i];
+            std::uint32_t id = 0;
+            if (a.id != b.id && AviMovie::is_video(a.id) && AviMovie::is_video(b.id)) indexed.read(a, chunk, &id);
+            same = (a.id == b.id || id == b.id) && a.offset == b.offset && a.size == b.size;
+        }
+        if (!same) std::printf("%s: index and walk differ\n", entry.path().filename().string().c_str());
+        CHECK(same);
+        ++movies;
+    }
+    CHECK(movies > 100);
 
     // 01A.TXT: 15 entries; the first has no text.
     const FontSet fonts = FontSet::load(data / "STATIC/FONTS.FLX");

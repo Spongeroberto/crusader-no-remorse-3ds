@@ -305,6 +305,10 @@ public:
     // movie is over, update() plays it instead of running the kernel, and
     // render() shows it.
     void play_movie(const std::string& name, MovieKind kind);
+    // Port: movies drawn twice as big whatever "bigvideo" says, for a screen
+    // shown at half resolution (Surface8::half, the 3DS): a doubled movie
+    // then shows every one of its pixels instead of half of them.
+    void set_movies_doubled(bool on) { movies_doubled_ = on; }
     const MoviePlayer* movie() const { return movie_.get(); }
 
     // ComputerGump::I_readComputer (computer_gump.hpp): the text on the
@@ -522,6 +526,7 @@ private:
     // Player field +0xC2: the movie resumes the colour cycling when it ends
     // (DS:5FFE clear when it started).
     bool movie_resumes_cycle_ = true;
+    bool movies_doubled_ = false;  // set_movies_doubled
     // Port addition (issue #24): the keys that stop a movie (Escape, Space,
     // Enter) already held when it started, ignored until they are released.
     std::array<bool, 3> movie_keys_held_at_start_{};
@@ -538,7 +543,7 @@ private:
     std::uint32_t animated_at_ = 0;
     // Sounds of the last movies: the mixer may still read the last one for a
     // buffer after it is stopped.
-    std::deque<std::vector<std::int8_t>> movie_sounds_;
+    std::deque<std::shared_ptr<const std::vector<std::int8_t>>> movie_sounds_;
 
     std::unique_ptr<MainMenu> menu_;
     Process* menu_process_ = nullptr;  // modal placeholder, owned by the kernel

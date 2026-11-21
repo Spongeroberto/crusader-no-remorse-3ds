@@ -28,13 +28,24 @@
 // lengths count pixel pairs, and each pixel byte is drawn twice (HUGE_12b0_
 // 1596). "00dc" frames are at full width (PLAYER_1468_0e51). JYV1 frames are
 // never halved.
+//
+// Port: the file stays open and a chunk is read when it is played, so a
+// movie costs its chunk list, not its size (16 MB for T02). The chunk list
+// comes from the "idx1" index at the end of the file, one read instead of one
+// per chunk, when its entries are exactly the chunks of the "movi" list;
+// else from walking the chunk headers. The index of some movies (18D, H01,
+// 19C...) calls "00db" frames that are "00dc" in their headers, which the
+// player reads: a video chunk's own id is taken from its header when it is
+// read (read() with `id`).
 
 #include "core/palette.hpp"
 #include "core/surface.hpp"
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -61,9 +72,11 @@ public:
         std::uint32_t size = 0;
     };
 
-    // Throws std::runtime_error when the file cannot be read or is not an AVI.
-    static AviMovie load(const std::filesystem::path& path);
-    static AviMovie parse(std::vector<std::uint8_t> bytes);
+    // Reads the headers and the chunk list; the chunks are read by read().
+    // `use_index`: take the list from "idx1" when it agrees (false: always
+    // walk the chunk headers). Throws std::runtime_error when the file cannot
+    // be read or is not an AVI.
+    static AviMovie load(const std::filesystem::path& path, bool use_index = true);
 
     int width() const { return width_; }
     int height() const { return height_; }
@@ -84,12 +97,25 @@ public:
     std::uint32_t audio_initial_frames() const { return audio_initial_frames_; }
 
     const std::vector<Chunk>& chunks() const { return chunks_; }
-    std::span<const std::uint8_t> data(const Chunk& c) const {
-        return std::span<const std::uint8_t>(bytes_).subspan(c.offset, c.size);
-    }
+    // Reads chunk `c` into `out` (resized to it) and, with `id`, the id in its
+    // header. Throws std::runtime_error when the file is cut short or the
+    // header does not match.
+    std::span<const std::uint8_t> read(const Chunk& c, std::vector<std::uint8_t>& out,
+                                       std::uint32_t* id = nullptr) const;
+    // A video frame, at full or half width (the id may come from the index).
+    static bool is_video(std::uint32_t id) { return id == kFrameChunk || id == kHalfWidthChunk; }
 
 private:
-    std::vector<std::uint8_t> bytes_;
+    struct FileCloser {
+        void operator()(std::FILE* f) const { std::fclose(f); }
+    };
+    void read_at(std::size_t offset, std::span<std::uint8_t> out) const;
+    bool parse_header(std::span<const std::uint8_t> hdrl);
+    bool chunks_from_index(std::size_t movi, std::size_t movi_end, std::size_t idx1, std::uint32_t idx1_size);
+    void chunks_from_walk(std::size_t from, std::size_t to);
+
+    std::unique_ptr<std::FILE, FileCloser> file_;
+    std::size_t file_size_ = 0;
     int width_ = 0;
     int height_ = 0;
     std::uint32_t codec_ = 0;
