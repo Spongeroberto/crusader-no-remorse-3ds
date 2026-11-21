@@ -100,6 +100,7 @@ public:
     void update(std::uint32_t ticks) override;
     bool closed() const override { return closed_; }
     bool over_view() const override { return true; }
+    std::optional<Area> area() const override { return Area{x_, y_, width_, height_}; }
 
     const std::string& text() const { return text_; }
     int x() const { return x_; }
@@ -120,6 +121,8 @@ private:
     std::string text_;
     int x_ = 0;
     int y_ = 0;
+    int width_ = 0;
+    int height_ = 0;
     int shown_ = 0;
     int page_start_ = 0;
     int column_ = 0;

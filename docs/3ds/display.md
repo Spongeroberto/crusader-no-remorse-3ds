@@ -34,6 +34,12 @@ detail unevenly, which looked worse than the smaller, even picture. Things are s
   it, like the blitter.
 - **Text.** Menus, dialogs and the status bar at half size have text 3 to 4 pixels high.
   They need their own treatment (the bottom screen, or a sharper scale for text).
+  The status bar went to the bottom screen. The computers, keypads and yes/no dialogs
+  (2026-11-21) are shown at full size over the halved scene (`Game::set_overlay_zoom`):
+  each reports its rectangle (`ModalGump::area`), which is copied pixel for pixel into
+  the top-screen picture, centred where its halved version was. They all fit (the
+  computer is 252×221). Weasel's shop (211×438) does not, and stays at half size, as
+  do the menus. `e2e/half_render_tests.cpp` checks the zoomed computer.
 - **Pre-scaled assets** (shapes averaged when the CIA is built) remain an option for a
   smoother picture at the same speed, at the cost of exact testing.
 

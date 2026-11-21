@@ -209,6 +209,11 @@ public:
     // Port addition: a platform closed from its own system menu (the 3DS's
     // HOME button) leaves "quit" out of the main menu.
     void set_menu_quit_shown(bool shown) { menu_quit_shown_ = shown; }
+    // Port addition: on a half-resolution screen (Surface8::half), a screen
+    // drawn over the view that reports its area (the computer, the keypad,
+    // the dialogs) is shown at full size over the halved scene, when it fits
+    // in the stored picture, so that its text stays readable (the 3DS).
+    void set_overlay_zoom(bool zoom) { overlay_zoom_ = zoom; }
     // Controller screen (options): it waits for a button press to bind, which
     // the platform gives with pad_button() instead of sending its key.
     bool waiting_for_pad() const;
@@ -402,6 +407,7 @@ private:
     // (a movie's background), under a modal screen or during a movie, the
     // view keeps its size: a screen of another size gets its centre.
     void render_view(Surface8& screen, RenderStats* stats = nullptr, bool keep_view = false);
+    void zoom_overlay(Surface8& screen) const;
     template <typename Draw>
     void draw_window(Surface8& screen, int x0, int y0, Draw&& draw);
     template <typename Draw>
@@ -453,6 +459,7 @@ private:
     bool cursor_drawn_ = true;
     bool status_bar_drawn_ = true;
     bool menu_quit_shown_ = true;
+    bool overlay_zoom_ = false;
     std::filesystem::path data_;
     std::filesystem::path mod_;  // level editor files that replace the data's
     int start_map_ = 1;

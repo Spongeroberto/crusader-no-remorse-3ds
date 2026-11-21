@@ -5,14 +5,19 @@
 // start (drawn full size, then halved), walking, firing (casings, impact
 // marks), the autosave icon and a visit to another map. Needs the original
 // data (data/, not in the repository) but no saved games: runs locally only.
-// Usage: half_render_tests <data_dir>   (skips with exit code 0 when data is absent)
+// Then a computer screen with Game::set_overlay_zoom on the half-resolution
+// game: the computer pixel for pixel over the halved scene.
+// Usage: half_render_tests <data_dir> [png_dir]   (skips with exit code 0 when
+// data is absent; png_dir gets the zoomed computer screen as shown)
 
 #include "core/flex.hpp"
+#include "core/png_writer.hpp"
 #include "engine/world/world.hpp"
 #include "game/game.hpp"
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <exception>
 #include <filesystem>
 #include <optional>
@@ -33,6 +38,7 @@ void check(bool ok, const char* what) {
 }
 
 struct Pair {
+    std::filesystem::path data;
     Game full_game, half_game;
     Surface8 full{kWidth, kHeight};
     Surface8 half = Surface8::half(kWidth, kHeight);
@@ -40,7 +46,8 @@ struct Pair {
     int frame = 0, differing = 0, in_play = 0;
 
     explicit Pair(const std::filesystem::path& data)
-        : full_game(data, std::filesystem::temp_directory_path() / "crusader-half-render-full"),
+        : data(data),
+          full_game(data, std::filesystem::temp_directory_path() / "crusader-half-render-full"),
           half_game(data, std::filesystem::temp_directory_path() / "crusader-half-render-half") {}
 
     template <class Fn>
@@ -78,7 +85,49 @@ std::optional<FixedRecord> landing(const std::filesystem::path& data, int map) {
     return std::nullopt;
 }
 
-void run(const std::filesystem::path& data) {
+// The computer screen with overlay zoom: the half game's stored picture is
+// the full one halved, but for the computer's rectangle, which is the full
+// picture's pixel for pixel, centred.
+void zoomed_computer(Pair& p, const std::filesystem::path& png_dir) {
+    // Back in play first: a movie or message at the end of the run above is skipped.
+    for (int i = 0; i < 600 && !(p.full_game.mouse_in_play() && p.half_game.mouse_in_play()); ++i) {
+        if (i % 30 == 15) p.both([](Game& g) { g.key(0x01, false, true, 0, 0x1B); });
+        if (i % 30 == 16) p.both([](Game& g) { g.key(0x01, false, false, 0); });
+        p.step("back to play");
+    }
+    check(p.full_game.mouse_in_play() && p.half_game.mouse_in_play(), "both games back in play");
+    p.half_game.set_overlay_zoom(true);
+    const std::string text = "OVERLAY ZOOM CHECK^THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG";
+    p.both([&](Game& g) { g.read_computer(text); });
+    for (int i = 0; i < 200; ++i) p.both([](Game& g) { g.update(kFrameUs); });
+    p.full_game.render(p.full);
+    p.half_game.render(p.half);
+    keep_every_other_pixel(p.full, p.expected);
+    if (!png_dir.empty()) {
+        Surface8 shown(p.half.stored_width(), p.half.stored_height());
+        shown.pixels = p.half.pixels;
+        // The game palette: the game's own may be faded at this point.
+        write_png(png_dir / "computer_zoomed.png", shown, Palette::load(p.data / "STATIC/GAMEPAL.PAL"));
+    }
+    // The computer (GUMPS.FLX shape 0x1E, frames 0 and 1) is 252 x 221 at
+    // (274, 129) of the 800 x 480 picture: shown at (74, 9) of the 400 x 240 one.
+    const int sw = p.half.stored_width(), sh = p.half.stored_height();
+    int inside = 0, outside = 0, wrong = 0;
+    for (int y = 0; y < sh; ++y) {
+        for (int x = 0; x < sw; ++x) {
+            const std::uint8_t got = p.half.row(y)[x];
+            const bool in = x >= 74 && x < 74 + 252 && y >= 9 && y < 9 + 221;
+            const std::uint8_t want = in ? p.full.row(y + 129 - 9)[x + 274 - 74]
+                                         : p.expected.row(y)[x];
+            ++(in ? inside : outside);
+            if (got != want) ++wrong;
+        }
+    }
+    std::printf("zoomed computer: %d pixels at full size, %d halved, %d wrong\n", inside, outside, wrong);
+    check(wrong == 0, "the zoomed computer is the full picture's, the rest halved");
+}
+
+void run(const std::filesystem::path& data, const std::filesystem::path& png_dir) {
     Pair p(data);
     // Off by default; on here so that their drawing is checked too.
     p.both([](Game& g) {
@@ -129,6 +178,7 @@ void run(const std::filesystem::path& data) {
     std::printf("frames %d (%d before play, %d in play), differing %d\n", p.frame, intro, p.in_play, p.differing);
     check(p.differing == 0, "the half-resolution screen is the full one with every other pixel kept");
     check(p.full_game.machine().faults().empty() && p.half_game.machine().faults().empty(), "no usecode faults");
+    zoomed_computer(p, png_dir);
 }
 
 }  // namespace
@@ -140,7 +190,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     try {
-        run(data);
+        run(data, argc > 2 ? argv[2] : "");
     } catch (const std::exception& e) {
         std::fprintf(stderr, "FAIL: %s\n", e.what());
         ++failures;

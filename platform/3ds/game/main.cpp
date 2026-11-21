@@ -511,6 +511,7 @@ int main() {
         game.start_up();
         game.set_cursor_drawn(false);  // no pointer: menus are played with keys
         game.set_status_bar_drawn(false);  // the bottom screen shows it
+        game.set_overlay_zoom(true);  // computers, keypads and dialogs at full size, readable
         // Destroyed before the game: its thread reads the game's mixer.
         std::unique_ptr<ctr::Audio> audio;
         if (game.audio()) {

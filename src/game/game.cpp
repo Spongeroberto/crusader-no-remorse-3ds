@@ -1937,6 +1937,24 @@ bool Game::render_lit(const Surface8& screen, std::vector<std::uint32_t>& argb) 
     return lighting_->shade(*world_, screen, palette(), lighting_options(config_), {}, argb.data());
 }
 
+// @orig none: port addition (Game::set_overlay_zoom)
+// The UI screen's area of full_screen_ (just drawn) copied pixel for pixel
+// into the stored pixels of `screen`, centred where its halved picture is,
+// moved inside if it would cross an edge. The stored picture is then no
+// longer the full one halved: it is only for showing.
+void Game::zoom_overlay(Surface8& screen) const {
+    const auto area = screen_->area();
+    if (!area) return;
+    const int x0 = std::max(area->x + ui_x_, 0), y0 = std::max(area->y + ui_y_, 0);
+    const int w = std::min(area->x + ui_x_ + area->w, full_screen_.width) - x0;
+    const int h = std::min(area->y + ui_y_ + area->h, full_screen_.height) - y0;
+    const int sw = screen.stored_width(), sh = screen.stored_height();
+    if (w <= 0 || h <= 0 || w > sw || h > sh) return;
+    const int to_x = std::clamp((x0 + w / 2) / 2 - w / 2, 0, sw - w);
+    const int to_y = std::clamp((y0 + h / 2) / 2 - h / 2, 0, sh - h);
+    for (int y = 0; y < h; ++y) std::copy_n(full_screen_.row(y0 + y) + x0, w, screen.row(to_y + y) + to_x);
+}
+
 // @orig 1188:19C1
 void Game::render(Surface8& screen, RenderStats* stats) {
     // Port addition: with a depth attached (stereoscopic 3D), all is at the
@@ -1953,6 +1971,7 @@ void Game::render(Surface8& screen, RenderStats* stats) {
         }
         render(full_screen_, stats);
         keep_every_other_pixel(full_screen_, screen);
+        if (overlay_zoom_ && !movie_ && !menu_ && screen_ && screen_->over_view()) zoom_overlay(screen);
         return;
     }
     if (lighting_) lighting_->forget();

@@ -90,6 +90,9 @@ public:
     bool closed() const override { return closed_; }
     int result() const override { return result_; }
     bool over_view() const override { return true; }
+    std::optional<Area> area() const override {
+        return Area{rect_.x0, rect_.y0, rect_.x1 - rect_.x0 + 1, rect_.y1 - rect_.y0 + 1};
+    }
 
     std::uint16_t shape() const { return shape_; }
     const ShapeButton::Rect& rect() const { return rect_; }

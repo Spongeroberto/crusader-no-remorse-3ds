@@ -24,6 +24,8 @@ ComputerGump::ComputerGump(ShapeCache& gumps, const FontSet& fonts, const std::s
     const int height = (top ? top->height : 0) + (bottom ? bottom->height : 0);
     x_ = (screen_width - width) >> 1;
     y_ = (screen_height - height) >> 1;
+    width_ = width;
+    height_ = height;
 }
 
 // @orig 13A0:03C8

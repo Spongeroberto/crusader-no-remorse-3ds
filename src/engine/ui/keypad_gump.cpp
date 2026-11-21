@@ -35,6 +35,8 @@ KeypadGump::KeypadGump(ShapeCache& gumps, std::int16_t code, std::function<void(
     const ShapeFrame* f = gump_frame(gumps, kShape, 0);
     x_ = (screen_width - (f ? f->width : 0)) >> 1;
     y_ = (screen_height - (f ? f->height : 0)) >> 1;
+    width_ = f ? f->width : 0;
+    height_ = f ? f->height : 0;
 }
 
 // @orig 13C8:08F5 13C8:00C4

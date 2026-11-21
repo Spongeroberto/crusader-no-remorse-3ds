@@ -104,6 +104,7 @@ public:
     // value entered (the code itself when it matched).
     int result() const override { return result_; }
     bool over_view() const override { return true; }
+    std::optional<Area> area() const override { return Area{x_, y_, width_, height_}; }
 
     int x() const { return x_; }
     int y() const { return y_; }
@@ -128,6 +129,8 @@ private:
     std::int16_t code_;
     int x_ = 0;
     int y_ = 0;
+    int width_ = 0;
+    int height_ = 0;
     std::array<int, kMaxDigits> digits_{};
     int count_ = 0;
     std::int32_t value_ = 0;

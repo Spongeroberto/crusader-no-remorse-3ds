@@ -8,6 +8,7 @@
 #include "core/surface.hpp"
 
 #include <cstdint>
+#include <optional>
 
 namespace crusader {
 
@@ -32,6 +33,12 @@ public:
     virtual int result() const { return 0; }
     // Drawn over the frozen game view, rather than over a cleared screen.
     virtual bool over_view() const { return false; }
+    // Port addition: the rectangle it draws in, in screen coordinates, for
+    // platforms that show it larger than the view (Game::set_overlay_zoom).
+    struct Area {
+        int x = 0, y = 0, w = 0, h = 0;
+    };
+    virtual std::optional<Area> area() const { return std::nullopt; }
     // The palette it writes to the DAC as it goes, if any.
     virtual const Palette* palette() const { return nullptr; }
 };
