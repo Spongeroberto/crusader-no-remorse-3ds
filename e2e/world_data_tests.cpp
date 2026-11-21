@@ -11,11 +11,13 @@
 #include "engine/usecode/world_intrinsics.hpp"
 #include "engine/world/collision.hpp"
 #include "engine/world/gravity.hpp"
+#include "engine/world/lighting.hpp"
 #include "engine/world/render.hpp"
 #include "engine/world/world.hpp"
 #include "test_saves.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <iterator>
 #include <optional>
@@ -259,6 +261,262 @@ void test_translucent_windows(const std::filesystem::path& data) {
     CHECK(opaque > 1000 && blended * 100 < opaque);  // what remains: other items, blends into 8..14
 }
 
+// Port lighting: the wall lamp of the bar in SAVEGAME.5 (item 8239, shape
+// 0x2A0, a dome, box z 72..96) lights from its bulb while whole; its broken
+// frames (4..7) give none, so a lamp shot goes out.
+void test_fixture_lights(const std::filesystem::path& data) {
+    constexpr ObjId kLamp = 8239;
+    const auto typeflags = load_typeflags(data / "STATIC/TYPEFLAG.DAT");
+    World w(typeflags);
+    w.load_saved_items(FlexArchive::open(test_saves(data) / "SAVEGAME.5"));
+    w.expand_glob_eggs(FlexArchive::open(data / "STATIC/GLOB.FLX"));
+    const auto shapes_flex = FlexArchive::open(data / "STATIC/SHAPES.FLX");
+    ShapeCache shapes(shapes_flex, ShapeLayout::World);
+    const auto xform = XformTable::load(data / "STATIC/XFORMPAL.DAT");
+    const auto palette = Palette::load(data / "STATIC/GAMEPAL.PAL");
+    Item* lamp = w.get(kLamp);
+    const Item* player = w.get(1);
+    CHECK(lamp && lamp->shape == 0x2A0 && lamp->frame == 0 && player);
+    if (!lamp || !player) return;
+    WorldLighting lighting(shapes, xform);
+    auto lamp_lights = [&](LightingOptions opt) {
+        const Camera camera{world_from_usecode(player->x), world_from_usecode(player->y), player->z};
+        const int left = ((camera.x - camera.y) >> 2) - 320, top = (((camera.x + camera.y) >> 3) - camera.z) - 240;
+        const auto list = build_display_list(w, shapes, View{left, top}, 640, 480);
+        Surface8 screen(640, 480);
+        draw_display_list(screen, list, &xform);
+        lighting.capture(w, list, screen, left, top, palette, opt, 0);
+        std::vector<std::uint32_t> argb(640 * 480);
+        lighting.shade(w, screen, palette, opt, {}, argb.data());
+        std::vector<PointLight> out;
+        for (const PointLight& l : lighting.lights())
+            if (l.owner == kLamp) out.push_back(l);
+        return out;
+    };
+    const LightingOptions on;
+    const auto lit = lamp_lights(on);
+    CHECK(lit.size() == 1);
+    if (lit.size() == 1) {
+        const float z = lit[0].pos.z / kLightZScale;
+        std::printf("bar lamp: light at %.0f %.0f z %.1f\n", lit[0].pos.x, lit[0].pos.y, z);
+        CHECK(z > 76 && z < 100);  // the bulb, high on the lamp
+    }
+    LightingOptions off = on;
+    off.fixture_lights = false;
+    CHECK(lamp_lights(off).empty());
+    lamp->frame = 4;  // broken
+    CHECK(lamp_lights(on).empty());
+}
+
+// The lights given by item `id` on a 640x480 view centred on `camera`, at
+// game tick `ticks`, with the default lighting options.
+std::vector<PointLight> lights_owned_by(World& w, ShapeCache& shapes, const XformTable& xform, const Palette& palette,
+                                        WorldLighting& lighting, Camera camera, ObjId id, std::uint32_t ticks = 0) {
+    const int left = ((camera.x - camera.y) >> 2) - 320, top = (((camera.x + camera.y) >> 3) - camera.z) - 240;
+    const auto list = build_display_list(w, shapes, View{left, top}, 640, 480);
+    Surface8 screen(640, 480);
+    draw_display_list(screen, list, &xform);
+    const LightingOptions opt;
+    lighting.capture(w, list, screen, left, top, palette, opt, ticks);
+    std::vector<std::uint32_t> argb(640 * 480);
+    lighting.shade(w, screen, palette, opt, {}, argb.data());
+    std::vector<PointLight> out;
+    for (const PointLight& l : lighting.lights())
+        if (l.owner == id) out.push_back(l);
+    return out;
+}
+
+// Port lighting: the wall lamps of shape 0xBC on map 1 (a corridor near the
+// start): the floodlight 7366 (frame 0) gives a white light, the red lantern
+// 7442 (frame 2) a red one; broken (frames 6, 8), none.
+void test_wall_lamp_lights(const std::filesystem::path& data) {
+    constexpr ObjId kFlood = 7366, kLantern = 7442;
+    const auto typeflags = load_typeflags(data / "STATIC/TYPEFLAG.DAT");
+    World w(typeflags);
+    w.load_fixed_map(FlexArchive::open(data / "STATIC/FIXED.DAT"), 1);
+    w.expand_glob_eggs(FlexArchive::open(data / "STATIC/GLOB.FLX"));
+    const auto shapes_flex = FlexArchive::open(data / "STATIC/SHAPES.FLX");
+    ShapeCache shapes(shapes_flex, ShapeLayout::World);
+    const auto xform = XformTable::load(data / "STATIC/XFORMPAL.DAT");
+    const auto palette = Palette::load(data / "STATIC/GAMEPAL.PAL");
+    Item* flood = w.get(kFlood);
+    Item* lantern = w.get(kLantern);
+    CHECK(flood && flood->shape == 0xBC && flood->frame == 0);
+    CHECK(lantern && lantern->shape == 0xBC && lantern->frame == 2);
+    if (!flood || !lantern) return;
+    WorldLighting lighting(shapes, xform);
+    auto lights_of = [&](ObjId id) { return lights_owned_by(w, shapes, xform, palette, lighting, {54800, 61300, 0}, id); };
+    const auto white = lights_of(kFlood), red = lights_of(kLantern);
+    CHECK(white.size() == 1 && red.size() == 1);
+    if (white.size() == 1) CHECK(white[0].color.z >= white[0].color.x && white[0].halo > 0);
+    if (red.size() == 1) CHECK(red[0].color.x > 2 * red[0].color.y && red[0].halo > 0);
+    flood->frame = 6;
+    lantern->frame = 8;
+    CHECK(lights_of(kFlood).empty() && lights_of(kLantern).empty());
+    // Broken, a lamp does not smoulder: it has no electronics.
+    int wisps = 0;
+    for (const PuffState& p : lighting.puffs_shown()) wisps += p.feature == 9;
+    CHECK(wisps == 0);
+}
+
+// Port lighting: the vending machine 4876 of map 1 (PEPSIEW 0x94, frame 0,
+// its glass on +x) is lit from inside: one light in front of its glass,
+// shining out of it (a spot along +x) with a glow over the glass, dimmed
+// with its flickering neon; shot (replaced by 0x39F), none, and it smoulders.
+void test_vending_machine_lights(const std::filesystem::path& data) {
+    constexpr ObjId kVending = 4876;
+    const auto typeflags = load_typeflags(data / "STATIC/TYPEFLAG.DAT");
+    World w(typeflags);
+    w.load_fixed_map(FlexArchive::open(data / "STATIC/FIXED.DAT"), 1);
+    w.expand_glob_eggs(FlexArchive::open(data / "STATIC/GLOB.FLX"));
+    const auto shapes_flex = FlexArchive::open(data / "STATIC/SHAPES.FLX");
+    ShapeCache shapes(shapes_flex, ShapeLayout::World);
+    const auto xform = XformTable::load(data / "STATIC/XFORMPAL.DAT");
+    const auto palette = Palette::load(data / "STATIC/GAMEPAL.PAL");
+    Item* vending = w.get(kVending);
+    CHECK(vending && vending->shape == 0x94 && vending->frame == 0);
+    if (!vending) return;
+    WorldLighting lighting(shapes, xform);
+    auto lights_of = [&] { return lights_owned_by(w, shapes, xform, palette, lighting, {57502, 40510, 96}, kVending, 120); };
+    const auto lit = lights_of();
+    CHECK(lit.size() == 1);
+    if (lit.size() == 1) {
+        const PointLight& l = lit[0];
+        std::printf("vending machine: light (%.0f, %.0f, %.0f), dir (%.0f, %.0f, %.0f)\n", l.pos.x, l.pos.y, l.pos.z,
+                    l.dir.x, l.dir.y, l.dir.z);
+        CHECK(l.dir.x == 1 && l.dir.y == 0 && l.cos_outer < 0 && l.halo > 0 && l.color.z >= l.color.x);
+    }
+    // Its neon flickers (frames 0..2, TYPEFLAG animation): its light with it.
+    vending->frame = 2;
+    const auto off = lights_of();
+    CHECK(off.size() == 1);
+    if (lit.size() == 1 && off.size() == 1) CHECK(off[0].color.z < 0.3f * lit[0].color.z);
+    vending->shape = 0x39F;  // shot: the broken machine (its usecode: frame 0)
+    vending->frame = 0;
+    CHECK(lights_of().empty());
+    int wisps = 0;
+    for (const PuffState& p : lighting.puffs_shown()) wisps += p.feature == 9;
+    CHECK(wisps >= 2);
+}
+
+// Port lighting (smoke): broken machines smoulder, a lamp does not. The
+// charger 5744 (RECHAGNS, shape 0x136) of map 1, shot (frame 0 -> 4, its
+// usecode), keeps a wisp rising from it.
+void test_broken_charger_smoulders(const std::filesystem::path& data) {
+    constexpr ObjId kCharger = 5744;
+    const auto typeflags = load_typeflags(data / "STATIC/TYPEFLAG.DAT");
+    World w(typeflags);
+    w.load_fixed_map(FlexArchive::open(data / "STATIC/FIXED.DAT"), 1);
+    w.expand_glob_eggs(FlexArchive::open(data / "STATIC/GLOB.FLX"));
+    const auto shapes_flex = FlexArchive::open(data / "STATIC/SHAPES.FLX");
+    ShapeCache shapes(shapes_flex, ShapeLayout::World);
+    const auto xform = XformTable::load(data / "STATIC/XFORMPAL.DAT");
+    const auto palette = Palette::load(data / "STATIC/GAMEPAL.PAL");
+    Item* charger = w.get(kCharger);
+    CHECK(charger && charger->shape == 0x136 && charger->frame == 0);
+    if (!charger) return;
+    WorldLighting lighting(shapes, xform);
+    auto wisps = [&] {
+        lights_owned_by(w, shapes, xform, palette, lighting, {56926, 48350, 0}, kCharger, 120);
+        int n = 0;
+        for (const PuffState& p : lighting.puffs_shown()) n += p.feature == 9;
+        return n;
+    };
+    CHECK(wisps() == 0);
+    charger->frame = 4;
+    const int broken = wisps();
+    std::printf("broken charger: %d wisp puffs\n", broken);
+    CHECK(broken >= 2);
+}
+
+// Port lighting: the alarm light 3868 (shape 0x174) of map 1 is dark until an
+// alert (set_alert: frame 1), then pulses red, its one light in place of the
+// one of its colour-cycled pixels; broken (frame 2), none.
+void test_alarm_lights(const std::filesystem::path& data) {
+    constexpr ObjId kAlarm = 3868;
+    const auto typeflags = load_typeflags(data / "STATIC/TYPEFLAG.DAT");
+    World w(typeflags);
+    w.load_fixed_map(FlexArchive::open(data / "STATIC/FIXED.DAT"), 1);
+    w.expand_glob_eggs(FlexArchive::open(data / "STATIC/GLOB.FLX"));
+    const auto shapes_flex = FlexArchive::open(data / "STATIC/SHAPES.FLX");
+    ShapeCache shapes(shapes_flex, ShapeLayout::World);
+    const auto xform = XformTable::load(data / "STATIC/XFORMPAL.DAT");
+    const auto palette = Palette::load(data / "STATIC/GAMEPAL.PAL");
+    Item* alarm = w.get(kAlarm);
+    CHECK(alarm && alarm->shape == 0x174 && alarm->frame == 0);
+    if (!alarm) return;
+    WorldLighting lighting(shapes, xform);
+    auto lights_at = [&](std::uint32_t ticks) {
+        return lights_owned_by(w, shapes, xform, palette, lighting, {31900, 35400, 0}, kAlarm, ticks);
+    };
+    CHECK(lights_at(0).empty());
+    set_alert(w, true);
+    CHECK(alarm->frame == 1);
+    const auto peak = lights_at(8), low = lights_at(23);  // 2 pulses a second: peak at 7.5, low at 22.5
+    CHECK(peak.size() == 1 && low.size() == 1);
+    if (peak.size() == 1 && low.size() == 1) {
+        std::printf("alarm light: red %.2f at its peak, %.2f at its low\n", peak[0].color.x, low[0].color.x);
+        CHECK(peak[0].color.x > 4 * peak[0].color.y && low[0].color.x * 2 < peak[0].color.x);
+    }
+    alarm->frame = 2;
+    CHECK(lights_at(8).empty());
+}
+
+// Port lighting: a shot of a firearm lights a short warm flash at the muzzle,
+// ahead of it, fading out in 4 ticks; energy weapons (their shot glows) none.
+void test_muzzle_flash(const std::filesystem::path& data) {
+    const auto typeflags = load_typeflags(data / "STATIC/TYPEFLAG.DAT");
+    World w(typeflags);
+    w.load_saved_items(FlexArchive::open(test_saves(data) / "SAVEGAME.5"));
+    w.expand_glob_eggs(FlexArchive::open(data / "STATIC/GLOB.FLX"));
+    const auto shapes_flex = FlexArchive::open(data / "STATIC/SHAPES.FLX");
+    ShapeCache shapes(shapes_flex, ShapeLayout::World);
+    const auto xform = XformTable::load(data / "STATIC/XFORMPAL.DAT");
+    const auto palette = Palette::load(data / "STATIC/GAMEPAL.PAL");
+    const Item* player = w.get(1);
+    CHECK(player != nullptr);
+    if (!player) return;
+    WorldLighting lighting(shapes, xform);
+    LightingOptions opt;
+    opt.player_lamp = false;  // its light is the player's too
+    auto player_lights = [&](std::uint32_t ticks) {
+        const Camera camera{world_from_usecode(player->x), world_from_usecode(player->y), player->z};
+        const int left = ((camera.x - camera.y) >> 2) - 320, top = (((camera.x + camera.y) >> 3) - camera.z) - 240;
+        const auto list = build_display_list(w, shapes, View{left, top}, 640, 480);
+        Surface8 screen(640, 480);
+        draw_display_list(screen, list, &xform);
+        lighting.capture(w, list, screen, left, top, palette, opt, ticks);
+        std::vector<std::uint32_t> argb(640 * 480);
+        lighting.shade(w, screen, palette, opt, {}, argb.data());
+        std::vector<PointLight> out;
+        for (const PointLight& l : lighting.lights())
+            if (l.owner == 1) out.push_back(l);
+        return out;
+    };
+    CHECK(player_lights(100).empty());
+    const std::int32_t mz = player->z + 32;
+    lighting.shot_fired(1, player->x, player->y, mz, 4, 0xB, 100);  // BA-40, towards +x
+    const auto fresh = player_lights(100);
+    CHECK(fresh.size() == 1);
+    if (fresh.size() == 1) {
+        const PointLight& l = fresh[0];
+        std::printf("muzzle flash: %.0f %.0f z %.1f, colour %.2f %.2f %.2f\n", l.pos.x, l.pos.y,
+                    l.pos.z / kLightZScale, l.color.x, l.color.y, l.color.z);
+        CHECK(l.pos.x > world_from_usecode(player->x) && std::abs(l.pos.y - world_from_usecode(player->y)) < 1);
+        CHECK(std::abs(l.pos.z / kLightZScale - mz) < 0.5f);
+        CHECK(l.color.x > l.color.y && l.color.y > l.color.z && l.color.x > 1.5f);  // warm, bright
+        const auto later = player_lights(102);
+        CHECK(later.size() == 1 && later[0].color.x < l.color.x * 0.5f);
+    }
+    CHECK(player_lights(104).empty());
+    CHECK(lighting.muzzle_flash_count() == 0);
+    lighting.shot_fired(1, player->x, player->y, mz, 4, 5, 200);  // PA-21: the plasma bolt glows itself
+    CHECK(player_lights(200).empty());
+    lighting.shot_fired(1, player->x, player->y, mz, 4, 2, 300);  // SG-A1
+    opt.flash_lights = false;
+    CHECK(player_lights(300).empty());
+}
+
 // A saved game loaded then written again gives back the original's bytes:
 // the item table (minus its unwritten last 10240 bytes, and status bit 0,
 // cleared by the loading) and its lists.
@@ -301,9 +559,15 @@ int main(int argc, char** argv) {
     }
     test_original_maps(data);
     test_crate_stack_order(data);
+    test_wall_lamp_lights(data);
+    test_broken_charger_smoulders(data);
+    test_vending_machine_lights(data);
+    test_alarm_lights(data);
     if (have_test_saves(data)) {
         test_translucent_windows(data);
         test_save_round_trip(data);
+        test_fixture_lights(data);
+        test_muzzle_flash(data);
     } else {
         ++failures;
     }

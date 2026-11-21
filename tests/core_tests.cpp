@@ -82,6 +82,38 @@ void check_config() {
         smooth.smooth_scaling = false;
         check(smooth.text().find("smoothscaling") == std::string::npos, "config smoothscaling erased");
     }
+    // "volumetricsmoke" (port addition): on by default, written only when off.
+    {
+        GameConfig smoke = GameConfig::parse("irq=7\r\n");
+        check(smoke.volumetric_smoke && smoke.text().find("volumetricsmoke") == std::string::npos,
+              "config volumetricsmoke default on");
+        smoke.volumetric_smoke = false;
+        check(smoke.text().find("volumetricsmoke=false") != std::string::npos &&
+                  !GameConfig::parse(smoke.text()).volumetric_smoke,
+              "config volumetricsmoke off round trip");
+    }
+    // "flashlight" (port addition): on by default, written only when off.
+    {
+        GameConfig lamp = GameConfig::parse("irq=7\r\n");
+        check(lamp.flashlight && lamp.text().find("flashlight") == std::string::npos, "config flashlight default on");
+        lamp.flashlight = false;
+        check(lamp.text().find("flashlight=false") != std::string::npos && !GameConfig::parse(lamp.text()).flashlight,
+              "config flashlight off round trip");
+    }
+    // "ambientlight" (port addition): 85 by default, written only when changed, clamped.
+    {
+        GameConfig ambient = GameConfig::parse("irq=7\r\n");
+        check(ambient.ambient_light == 85 && ambient.text().find("ambientlight") == std::string::npos,
+              "config ambientlight default 85");
+        ambient.ambient_light = 40;
+        check(ambient.text().find("ambientlight=40") != std::string::npos &&
+                  GameConfig::parse(ambient.text()).ambient_light == 40,
+              "config ambientlight round trip");
+        check(GameConfig::parse("ambientlight=150\r\n").ambient_light == 100, "config ambientlight clamped");
+    }
+    // The controller's left trigger switches the lamp (L) by default.
+    check(PadSettings{}.buttons[kPadLeftTrigger] == kPadFlashlight && kPadActions[kPadFlashlight].scancode == 0x26,
+          "pad left trigger: flashlight");
     // "viewzoom" (port addition): hundredths, whole values keep their old file form, x1.5 is new.
     check(GameConfig::parse("irq=7\r\n").view_zoom_pct == 0, "config viewzoom default auto");
     check(GameConfig::parse("viewzoom=2\r\n").view_zoom_pct == 200, "config viewzoom whole");

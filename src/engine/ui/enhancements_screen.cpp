@@ -16,6 +16,8 @@ constexpr int kTitleY = 66, kIconSize = 14, kIconGap = 8;
 constexpr int kRowX0 = 130, kRowX1 = 509, kRowY0 = 90, kRowStep = 26, kRowHeight = 24;
 constexpr int kTextDrop = 17, kRowPad = 18;  // glyphs hang from their baseline
 constexpr std::uint8_t kFrameColour = 0x57, kGreen = 0x0C, kDimGreen = 0x75;
+// A row that does nothing as things are (MISC.PAL): focused, not.
+constexpr std::uint8_t kInactiveFocused = 0x1C, kInactive = 0x7F;
 
 // Text in one colour: drawn on a scratch surface, copied in `tint`.
 // @orig none: screen of the port's enhancements
@@ -73,7 +75,8 @@ constexpr Entry kMainEntries[] = {Entry::Controls, Entry::Display, Entry::Effect
 constexpr Entry kControlsEntries[] = {Entry::Pad,        Entry::Directional, Entry::Aim,
                                       Entry::Draw,       Entry::PreciseAim,  Entry::Run,
                                       Entry::Vibration,  Entry::VibrationIntensity, Entry::Back};
-constexpr Entry kDisplayEntries[] = {Entry::Native, Entry::Zoom, Entry::Smooth, Entry::Follow, Entry::Back};
+constexpr Entry kDisplayEntries[] = {Entry::Native,   Entry::Zoom,  Entry::Smooth,     Entry::Follow, Entry::Lighting,
+                                     Entry::Smoke,    Entry::Flashlight, Entry::Ambient, Entry::Back};
 constexpr Entry kEffectsEntries[] = {Entry::Impact, Entry::Blood, Entry::Casings, Entry::Back};
 constexpr Entry kGameEntries[] = {Entry::Autosave, Entry::FixBugs, Entry::Language, Entry::Back};
 constexpr Entry kCheatsEntries[] = {Entry::RemainsLoot, Entry::Back};
@@ -126,6 +129,12 @@ std::span<const EnhancementsScreen::Entry> EnhancementsScreen::entries() const {
 }
 
 // @orig none: port-only enhancements window
+bool EnhancementsScreen::inactive(Entry entry) const {
+    // The 3D lighting's own options: without it, nothing of them is drawn.
+    return (entry == Entry::Smoke || entry == Entry::Flashlight || entry == Entry::Ambient) && !config_->lighting;
+}
+
+// @orig none: port-only enhancements window
 int EnhancementsScreen::row_of(Entry entry) const {
     const auto list = entries();
     for (std::size_t i = 0; i < list.size(); ++i)
@@ -166,7 +175,7 @@ void EnhancementsScreen::draw(Surface8& screen) const {
         const Entry entry = list[static_cast<std::size_t>(row)];
         const Rect r = row_rect(row);
         const bool focused = row == focus_;
-        const int tint = focused ? kGreen : kDimGreen;
+        const int tint = inactive(entry) ? (focused ? kInactiveFocused : kInactive) : focused ? kGreen : kDimGreen;
         draw_rounded_box(screen, r.x0, r.y0, r.x1, r.y1, -1, static_cast<std::uint8_t>(tint));
         const TextWriter writer(*fonts_, kFont);
         const std::string label = button_label(entry);
@@ -226,6 +235,22 @@ void EnhancementsScreen::draw(Surface8& screen) const {
         case Entry::Follow:
             name = tr("CAMERA FOLLOW");
             on = config_->follow_player;
+            break;
+        case Entry::Lighting:
+            name = tr("3D LIGHTING");
+            on = config_->lighting;
+            break;
+        case Entry::Smoke:
+            name = tr("VOLUMETRIC SMOKE");
+            on = config_->volumetric_smoke;
+            break;
+        case Entry::Flashlight:
+            name = tr("FLASHLIGHT");
+            on = config_->flashlight;
+            break;
+        case Entry::Ambient:
+            name = tr("AMBIENT LIGHT");
+            value = std::to_string(config_->ambient_light) + "%";
             break;
         case Entry::Impact:
             name = tr("IMPACT MARKS");
@@ -299,6 +324,7 @@ void EnhancementsScreen::activate(int row) {
     const auto list = entries();
     if (row < 0 || row >= static_cast<int>(list.size())) return;
     focus_ = row;
+    if (inactive(list[static_cast<std::size_t>(row)])) return;
     switch (list[static_cast<std::size_t>(row)]) {
     case Entry::Controls:
     case Entry::Display:
@@ -322,6 +348,10 @@ void EnhancementsScreen::activate(int row) {
         break;
     case Entry::Smooth: config_->smooth_scaling = !config_->smooth_scaling; break;
     case Entry::Follow: config_->follow_player = !config_->follow_player; break;
+    case Entry::Lighting: config_->lighting = !config_->lighting; break;
+    case Entry::Smoke: config_->volumetric_smoke = !config_->volumetric_smoke; break;
+    case Entry::Flashlight: config_->flashlight = !config_->flashlight; break;
+    case Entry::Ambient: config_->ambient_light = (config_->ambient_light + 5) % 105; break;
     case Entry::Impact: config_->impact_marks = !config_->impact_marks; break;
     case Entry::Blood:
         // Off, on, gore, off.
@@ -361,6 +391,7 @@ void EnhancementsScreen::key(std::uint16_t code) {
     }
     if (closed_) return;
     const bool on_intensity = row_of(Entry::VibrationIntensity) == focus_;
+    const bool on_ambient = row_of(Entry::Ambient) == focus_ && !inactive(Entry::Ambient);
     switch (code) {
     case gump_key::kEscape: back(); break;
     case gump_key::kEnter: activate(focus_); break;
@@ -370,6 +401,7 @@ void EnhancementsScreen::key(std::uint16_t code) {
             config_->vibration_intensity -= 10;
             if (vibration_preview_) vibration_preview_();
         }
+        if (on_ambient) config_->ambient_light = std::max(config_->ambient_light - 5, 0);
         break;
     case gump_key::kRight:
     case '6':
@@ -377,6 +409,7 @@ void EnhancementsScreen::key(std::uint16_t code) {
             config_->vibration_intensity += 10;
             if (vibration_preview_) vibration_preview_();
         }
+        if (on_ambient) config_->ambient_light = std::min(config_->ambient_light + 5, 100);
         break;
     case gump_key::kUp:
     case '8': focus_ = std::max(focus_ - 1, 0); break;

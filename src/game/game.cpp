@@ -49,6 +49,9 @@ namespace crusader {
 
 namespace {
 
+// 1468:2869: Escape, Space and Enter held stop a movie.
+constexpr std::array<std::uint8_t, 3> kMovieStopKeys = {0x01, 0x39, 0x1C};
+
 struct WeaponVibration {
     std::uint16_t low_frequency;
     std::uint16_t high_frequency;
@@ -456,7 +459,7 @@ void Game::reset_world() {
     // where the original restores the saved state, and the reset would undo
     // the player's saved stance.
     hooks.monster_egg = [this](ObjId egg) { spawn_from_egg(*kernel_, *world_, anims_, npc_types_, egg); };
-    hooks.egg_hatcher = [this](ObjId egg) { start_egg_hatcher(*kernel_, *world_, egg); };
+    hooks.egg_hatcher = [this](ObjId egg) { start_egg_hatcher(*kernel_, *world_, egg, restoring_fast_area_); };
     // 1040:04BC: stumble (0x3B, replacing the current animations), stand
     // up (4 in combat, else 0), and a grunt on the NPC's voice.
     hooks.hard_landing = [this](ObjId npc) {
@@ -483,6 +486,9 @@ void Game::reset_world() {
     casings_.clear();
     hooks.shot_landed = [this](ObjId hit, std::int32_t x, std::int32_t y, std::int32_t z, int fire_type) {
         if (config_.impact_marks) damage_marks_.record(*world_, hit, {x, y, z}, fire_type);
+    };
+    hooks.shot_fired = [this](ObjId shooter, std::int32_t x, std::int32_t y, std::int32_t z, int dir, int fire_type) {
+        if (lighting_) lighting_->shot_fired(shooter, x, y, z, dir, fire_type, kernel_->ticks());
     };
     hooks.npc_wounded = [this](const Wound& wound) {
         if (config_.blood_marks) damage_marks_.bleed(*world_, wound, config_.gore_mode);
@@ -661,7 +667,11 @@ void Game::load_save_file(const std::filesystem::path& path) {
         for (const auto& [id, event] : restarts) world_->hooks().start_event(id, event);
     }
     world_->clear_fast_area();
+    // The eggs' hatchers stand for the saved ones: an egg the player stands
+    // in had hatched already (start_egg_hatcher, issue #26).
+    restoring_fast_area_ = true;
     world_->set_camera(player->x, player->y, player->z);
+    restoring_fast_area_ = false;
     // An NPC saved while its death played (dead, last action 0x12 or 0x14,
     // short of the action's last frame): without its animation process it
     // would stay as it was, often still standing, and never become a body
@@ -1098,12 +1108,28 @@ void Game::start_movie(const std::string& name, MovieKind kind, Surface8 screen)
     // 1468:3ABC: the colour cycling pauses.
     world_->state.cycle_paused = true;
     movie_resumes_cycle_ = !world_->state.movie_keeps_cycle_paused;
+    // Port addition (issue #24): the original stops a movie whenever one of
+    // its keys is down (1468:2869), even the one that started it. Enter and
+    // Space use a computer whose usecode plays an overlay (MVA03B in
+    // mission 3) 2 frames later, the key still held, and the movie vanished
+    // at once. A key held from before the movie counts only once released
+    // and pressed again.
+    for (std::size_t i = 0; i < kMovieStopKeys.size(); ++i) {
+        movie_keys_held_at_start_[i] = keyboard_.down(kMovieStopKeys[i], false) != 0;
+    }
     kernel_->interrupt_slice();
 }
 
 // @orig 1468:03E3 1468:2869
 void Game::update_movie(std::uint32_t elapsed_us) {
-    movie_->advance(elapsed_us, [this](std::uint8_t scancode) { return keyboard_.down(scancode, false) != 0; });
+    movie_->advance(elapsed_us, [this](std::uint8_t scancode) {
+        const bool down = keyboard_.down(scancode, false) != 0;
+        const auto key = std::find(kMovieStopKeys.begin(), kMovieStopKeys.end(), scancode);
+        if (key == kMovieStopKeys.end()) return down;
+        bool& stale = movie_keys_held_at_start_[static_cast<std::size_t>(key - kMovieStopKeys.begin())];
+        if (!down) stale = false;
+        return down && !stale;
+    });
     if (movie_->take_playback_start() && audio_) {
         // 1468:03E3: dsfx_stop_all, music_pause (not for an overlay).
         audio_->stop_all();
@@ -1290,6 +1316,16 @@ void Game::on_key(const GameKeyEvent& e) {
     // CRUSADER_1138_2B03, at the head of the Controller's keys: the typed
     // cheat code, which sees every key (Shift too).
     cheat_code_key(*world_, e);
+    // Port addition (GameConfig::flashlight): with the 3D lighting, L (no
+    // Ctrl or Alt: Ctrl+L is a cheat) switches the Silencer's lamp, the same
+    // setting as the option. The original gives L nothing to do.
+    if (config_.lighting && e.scancode == 0x26 && !e.extended && !(e.flags & (kCtrl | kAlt))) {
+        if (e.pressed && e.count <= 1) {
+            config_.flashlight = !config_.flashlight;
+            save_config();
+        }
+        return;
+    }
     // Port addition (GameConfig::toggle_run): a Shift press flips running, and
     // the Controller sees Shift held exactly while it is on.
     GameKeyEvent ev = e;
@@ -1871,6 +1907,36 @@ void Game::draw_window_in_place(Surface8& screen, int x0, int y0, Draw&& draw) {
     draw(window);
 }
 
+namespace {
+
+// The game's lighting: the scene stays readable (ambient), lamps, screens,
+// flashes, explosions and the Silencer's lamp light it; the smoke as chosen
+// (GameConfig::volumetric_smoke); the ambient light as chosen
+// (GameConfig::ambient_light, percent).
+// @orig none: port lighting
+LightingOptions lighting_options(const GameConfig& config) {
+    LightingOptions o;
+    o.ambient = std::clamp(config.ambient_light, 0, 100) / 100.0f;
+    o.smoke = config.volumetric_smoke;
+    o.player_lamp = config.flashlight;
+    return o;
+}
+
+}  // namespace
+
+// @orig none: port lighting
+void Game::set_lighting_gpu(LightingGpu* gpu) {
+    lighting_gpu_ = gpu;
+    if (lighting_) lighting_->set_gpu(gpu);
+}
+
+// @orig none: port lighting
+bool Game::render_lit(const Surface8& screen, std::vector<std::uint32_t>& argb) {
+    if (!config_.lighting || !lighting_ || !lighting_->captured()) return false;
+    argb.resize(screen.pixels.size());
+    return lighting_->shade(*world_, screen, palette(), lighting_options(config_), {}, argb.data());
+}
+
 // @orig 1188:19C1
 void Game::render(Surface8& screen, RenderStats* stats) {
     // Port: a half-resolution screen (Surface8::half) is drawn into directly
@@ -1885,6 +1951,7 @@ void Game::render(Surface8& screen, RenderStats* stats) {
         keep_every_other_pixel(full_screen_, screen);
         return;
     }
+    if (lighting_) lighting_->forget();
     // A screen larger than 640 x 480 (native resolution) shows more of the
     // scene around the camera; everything else stays 640 x 480, centred.
     const bool large = screen.width >= kScreenWidth && screen.height >= kScreenHeight &&
@@ -1994,6 +2061,16 @@ void Game::render_view(Surface8& screen, RenderStats* stats, bool keep_view) {
         if (casings) casings_.draw(surface, d, damage_marks_);
     });
     const double t_drawn = now();
+    // Port addition: what the lighting needs of the world just drawn; what
+    // comes over it below (aiming sprites, status bar) is shown unlit.
+    if (config_.lighting) {
+        if (!lighting_) {
+            lighting_ = std::make_unique<WorldLighting>(shapes_, xform_, &anims_);
+            lighting_->set_gpu(lighting_gpu_);
+        }
+        lighting_->capture(*world_, list, screen, s.view_left, s.view_top, palette(), lighting_options(config_),
+                           kernel_->ticks());
+    }
     // SPMGR.C: the screen sprites (aiming mode), over the scene, unless
     // suspended in the menu mode (DS:2D8F).
     for (const ScreenSprite& sprite : world_->state.screen_sprites.all()) {

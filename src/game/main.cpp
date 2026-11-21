@@ -1,15 +1,18 @@
 // crusader: runs the game from a saved game (milestone 1: the world runs, the
 // camera moves with the arrow keys).
 //
-//   crusader [data | game.iso | GAME.GOG] [--mod DIR] [--save N | --new-game | --map N [--egg E]] [-laurie] [--fullscreen] [--auto-save-names]  (neither: the start-up movies, then the menu) [--movie NAME | --movie-overlay NAME] [--frames N [--scroll DX DY] [--walk] [--fire] [--use ID] [--menu | --menu-load | --menu-credits | --menu-options | --menu-gamepad | --menu-new] --png out.png [--wav out.wav]]
+//   crusader [data | game.iso | GAME.GOG] [--mod DIR] [--save N | --new-game | --map N [--egg E]] [-laurie] [--fullscreen] [--auto-save-names]  (neither: the start-up movies, then the menu) [--movie NAME | --movie-overlay NAME] [--frames N [--scroll DX DY] [--walk] [--fire] [--use ID] [--hit ID] [--menu | --menu-load | --menu-credits | --menu-options | --menu-gamepad | --menu-display | --menu-new] --png out.png [--wav out.wav] [--save-to FILE]]
 //
 // With --png, runs N frames of 1/60 s without a window, moving the camera by
 // (DX, DY) usecode units per frame or making the player walk, and writes the
 // last frame; --wav also writes the sound mixed meanwhile. --new-game starts
 // the first mission instead of loading a saved game. --use uses an item
-// (as Enter on the selected item) before the first frame. --movie plays a
+// (as Enter on the selected item) before the first frame, --hit shoots
+// one (200 damage of fire type 2, from the player). --movie plays a
 // cutscene (FLICS/NAME.AVI, as MovieGump::I_playMovieCutscene) right away,
-// --movie-overlay as I_playMovieOverlay.
+// --movie-overlay as I_playMovieOverlay. --save-to writes a saved game of
+// the state after the frames to FILE (named after it), e.g. with --map and
+// --egg to make a save at a teleport egg.
 // --mod loads a folder made by the level editor (crusader-no-remorse-editor): its
 // files replace those of the data. --map starts a new game on that map, on
 // its teleport egg E (frame 1, quality low byte E; 0x1E by default, where
@@ -24,9 +27,11 @@
 #include "core/iso_image.hpp"
 #include "core/language.hpp"
 #include "core/png_writer.hpp"
+#include "platform/gl_lighting.hpp"
 #include "crusader_version.hpp"
 #include "engine/ui/christmas_hat.hpp"
 #include "engine/world/inventory.hpp"
+#include "engine/world/projectile.hpp"
 #include "game/game.hpp"
 #include "platform/real_shift.hpp"
 #include "platform/sdl_audio.hpp"
@@ -110,13 +115,17 @@ int main(int argc, char** argv) {
     bool new_game = false, save_given = false, fullscreen = false, debug_title = false, auto_save_names = false;
     int png_width = Game::kScreenWidth, png_height = Game::kScreenHeight;
     bool classic = false;  // --classic: the original 640 x 480 view, stretched to the window
+    bool lighting = false;  // --lighting: the 3D lighting on for this run (GameConfig::lighting)
+    bool cpu_lighting = false;  // --cpu-lighting: the 3D lighting on the processor, not the GPU
     bool laurie = false;
     double gamma = 1.0;
     std::int32_t scroll_x = 0, scroll_y = 0;
-    bool walk = false, fire = false, menu = false, menu_load = false, menu_credits = false, menu_options = false, menu_gamepad = false,
+    bool walk = false, fire = false, menu = false, menu_load = false, menu_credits = false, menu_options = false, menu_gamepad = false, menu_display = false,
          menu_new = false;
     std::string png, wav, movie;
+    std::filesystem::path save_to;  // --save-to FILE: the state after the frames, saved there
     int use = 0;
+    int hit = 0;  // --hit ID: the item shot (200 damage of fire type 2, from the player) before the frames
     MovieKind movie_kind = MovieKind::kCutscene;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--version") == 0) {
@@ -127,6 +136,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) frames = std::stoi(argv[++i]);
         else if (std::strcmp(argv[i], "--png") == 0 && i + 1 < argc) png = argv[++i];
         else if (std::strcmp(argv[i], "--wav") == 0 && i + 1 < argc) wav = argv[++i];
+        else if (std::strcmp(argv[i], "--save-to") == 0 && i + 1 < argc) save_to = argv[++i];
         else if (std::strcmp(argv[i], "--new-game") == 0) new_game = true;
         else if (std::strcmp(argv[i], "--mod") == 0 && i + 1 < argc) mod = argv[++i];
         else if (std::strcmp(argv[i], "--map") == 0 && i + 1 < argc) start_map = std::stoi(argv[++i], nullptr, 0), new_game = true;
@@ -146,12 +156,16 @@ int main(int argc, char** argv) {
         }
         else if (std::strcmp(argv[i], "--walk") == 0) walk = true;
         else if (std::strcmp(argv[i], "--fire") == 0) fire = true;
+        else if (std::strcmp(argv[i], "--lighting") == 0) lighting = true;
+        else if (std::strcmp(argv[i], "--cpu-lighting") == 0) cpu_lighting = true;
         else if (std::strcmp(argv[i], "--use") == 0 && i + 1 < argc) use = std::stoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--hit") == 0 && i + 1 < argc) hit = std::stoi(argv[++i]);
         else if (std::strcmp(argv[i], "--menu") == 0) menu = true;
         else if (std::strcmp(argv[i], "--menu-load") == 0) menu = menu_load = true;
         else if (std::strcmp(argv[i], "--menu-credits") == 0) menu = menu_credits = true;
         else if (std::strcmp(argv[i], "--menu-options") == 0) menu = menu_options = true;
         else if (std::strcmp(argv[i], "--menu-gamepad") == 0) menu = menu_options = menu_gamepad = true;
+        else if (std::strcmp(argv[i], "--menu-display") == 0) menu = menu_options = menu_display = true;
         else if (std::strcmp(argv[i], "--menu-new") == 0) menu = menu_new = true;
         else if (std::strcmp(argv[i], "--scroll") == 0 && i + 2 < argc) {
             scroll_x = std::stoi(argv[++i]);
@@ -183,6 +197,21 @@ int main(int argc, char** argv) {
         }
         Game game(data, {}, mod);
         game.set_port_version(CRUSADER_VERSION);
+        if (lighting) game.config().lighting = true;
+        // The 3D lighting on the GPU when there is one (else on the processor),
+        // made the first time the option is on; --cpu-lighting keeps it on the
+        // processor.
+        std::unique_ptr<GlLighting> lighting_gpu;
+        bool lighting_gpu_tried = cpu_lighting;
+        auto start_lighting_gpu = [&] {
+            if (lighting_gpu_tried || !game.config().lighting) return;
+            lighting_gpu_tried = true;
+            std::string why;
+            lighting_gpu = GlLighting::create(&why);
+            if (lighting_gpu) game.set_lighting_gpu(lighting_gpu.get());
+            else std::fprintf(stderr, "3D lighting on the processor: %s\n", why.c_str());
+        };
+        start_lighting_gpu();
         game.set_auto_save_names(auto_save_names);
         {
             const std::time_t now = std::time(nullptr);
@@ -212,6 +241,7 @@ int main(int argc, char** argv) {
             if (walk) game.key(0x48, true, true, 0);
             game.capture_sound(!wav.empty());
             if (use) use_item(game.world(), static_cast<ObjId>(use));
+            if (hit) apply_damage(game.kernel(), game.world(), game.animations(), static_cast<ObjId>(hit), 1, 0, 200, 2);
             for (int i = 0; i < frames; ++i) {
                 if (scroll_x || scroll_y) game.move_camera(scroll_x, scroll_y);
                 // --fire: space tapped every 40 frames
@@ -220,8 +250,22 @@ int main(int argc, char** argv) {
                     game.key(0x39, false, false, 0);
                 }
                 game.update(kFrameUs);
+                // The lighting's smoke starts from what each frame shows, as in play.
+                if (lighting) game.render(screen, &stats);
             }
             if (!wav.empty()) write_wav(wav, game.captured_sound(), AsylumMixer::kMixRate);
+            if (!save_to.empty()) {
+                // Saved in slot 1 of a scratch folder (the game's own slots
+                // untouched), then moved to FILE.
+                const auto dir = std::filesystem::temp_directory_path() / "crusader-save-to";
+                std::filesystem::remove_all(dir);
+                std::filesystem::create_directories(dir);
+                game.set_save_dir(dir);
+                game.set_save_name(1, save_to.stem().string());
+                game.save_game(1);
+                std::filesystem::copy_file(dir / "SAVEGAME.1", save_to, std::filesystem::copy_options::overwrite_existing);
+                std::filesystem::remove_all(dir);
+            }
             if (menu) {  // --menu: Escape, as pressed in play
                 game.key(0x01, false, true, 0, 0x1B);
                 game.mouse_move(320, 240);
@@ -245,17 +289,34 @@ int main(int argc, char** argv) {
                 game.key(0x1C, false, true, 0, 0x0D);
                 game.key(0x1C, false, false, 0);
             }
-            if (menu_gamepad) {  // then the "manette" button, clicked
+            if (menu_gamepad || menu_display) {  // then the enhancements button, clicked
                 game.mouse_move(440, 330);
                 game.mouse_button(1, true, 440, 330);
                 game.mouse_button(1, false, 440, 330);
+                auto press = [&](std::uint8_t scancode, std::uint8_t ascii) {
+                    game.key(scancode, scancode != 0x1C, true, 0, ascii);
+                    game.key(scancode, scancode != 0x1C, false, 0);
+                };
+                if (menu_display) press(0x50, 0);  // down to DISPLAY
+                press(0x1C, 0x0D);                 // the page (CONTROLS first)
+                if (menu_gamepad) press(0x1C, 0x0D);  // CONTROLLER, first on it
             }
             if (menu_new) {  // Enter on "new game": the difficulty screen
                 game.key(0x1C, false, true, 0, 0x0D);
                 game.key(0x1C, false, false, 0);
             }
             game.render(screen, &stats);
-            write_png(png, screen, game.palette());
+            if (std::vector<std::uint32_t> lit; game.render_lit(screen, lit)) {
+                std::vector<std::uint8_t> rgb(lit.size() * 3);
+                for (std::size_t i = 0; i < lit.size(); ++i) {
+                    rgb[i * 3] = static_cast<std::uint8_t>(lit[i] >> 16);
+                    rgb[i * 3 + 1] = static_cast<std::uint8_t>(lit[i] >> 8);
+                    rgb[i * 3 + 2] = static_cast<std::uint8_t>(lit[i]);
+                }
+                write_png_rgb(png, screen.width, screen.height, rgb.data());
+            } else {
+                write_png(png, screen, game.palette());
+            }
             std::printf("%s\n", diagnostics(game, stats, 0).c_str());
             for (const auto& [n, calls] : game.machine().unbound_intrinsic_calls()) {
                 std::printf("  missing intrinsic 0x%03X: %u calls\n", n, calls);
@@ -279,6 +340,7 @@ int main(int argc, char** argv) {
         // Native resolution: the game is drawn at the largest whole fraction of
         // the window that is still 640 x 480 or more, so the pixels keep their
         // shape and a wider window shows more of the surroundings.
+        std::vector<std::uint32_t> lit;  // the lit frame (GameConfig::lighting)
         auto fit_screen = [&]() {
             int w = 0, h = 0;
             presenter.output_size(&w, &h);
@@ -384,6 +446,7 @@ int main(int argc, char** argv) {
             }
             fit_screen();
             presenter.set_smooth(game.config().smooth_scaling);
+            start_lighting_gpu();  // when the option has just been switched on
             game.render(screen, &stats);
             if (debug_title) {
                 int ow = 0, oh = 0;
@@ -392,7 +455,9 @@ int main(int argc, char** argv) {
                 std::snprintf(size, sizeof size, "  view %dx%d in %dx%d", screen.width, screen.height, ow, oh);
                 presenter.set_title(diagnostics(game, stats, fps) + size);
             }
-            presenter.present(screen, game.palette());
+            // Port addition (lighting option): the world lit in 3D, in true colour.
+            if (game.render_lit(screen, lit)) presenter.present_argb(lit.data(), screen.width, screen.height);
+            else presenter.present(screen, game.palette());
         }
         print_faults(game);
         return 0;

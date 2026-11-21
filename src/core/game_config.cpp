@@ -109,6 +109,10 @@ GameConfig GameConfig::parse(std::string_view text) {
         else if (key == "directionalmove") c.directional_move = value == "true";
         else if (key == "viewzoom") c.view_zoom_pct = view_zoom_pct_of(value);
         else if (key == "smoothscaling") c.smooth_scaling = value == "true";
+        else if (key == "lighting") c.lighting = value == "true";
+        else if (key == "volumetricsmoke") c.volumetric_smoke = value != "false";
+        else if (key == "flashlight") c.flashlight = value != "false";
+        else if (key == "ambientlight") c.ambient_light = std::clamp(number(value), 0, 100);
         else if (key == "nativeresolution") c.native_resolution = value != "false";
         else if (key == "autosave") c.autosave = value != "false";
         else if (key == "directionalaim") c.directional_aim = value == "true";
@@ -186,6 +190,14 @@ std::string GameConfig::text() const {
     else out.erase("goremode");
     if (casings) out.set("casings", "true");
     else out.erase("casings");
+    if (lighting) out.set("lighting", "true");
+    else out.erase("lighting");
+    if (!volumetric_smoke) out.set("volumetricsmoke", "false");
+    else out.erase("volumetricsmoke");
+    if (!flashlight) out.set("flashlight", "false");
+    else out.erase("flashlight");
+    if (ambient_light != 85) out.set("ambientlight", std::to_string(ambient_light));
+    else out.erase("ambientlight");
     if (remains_loot) out.set("remainsloot", "true");
     else out.erase("remainsloot");
     if (!language.empty()) out.set("language", language);

@@ -614,6 +614,100 @@ void test_new_game(const std::filesystem::path& data) {
     CHECK(game.machine().faults().empty());
 }
 
+// Port lighting (smoke): a security camera shot leaves smoke where it was,
+// then smoulders. Save CAM1: camera 7645 (shape 0x1B8, frame 4) on a wall
+// in view. Its explosion sprite is raised over the scene and moved by its
+// shape's offset (sprite_process.hpp); the smoke started under that anchor,
+// some 45 pixels below the camera. Broken (frame 9), the camera keeps a thin
+// wisp rising from it.
+void test_camera_smoke(const std::filesystem::path& data) {
+    constexpr ObjId kCamera = 7645;
+    Game game(data, test_saves(data));
+    game.config().lighting = true;
+    game.config().volumetric_smoke = true;
+    game.load_save_file(test_saves(data) / "camera-cassee-fumee.sav");
+    World& w = game.world();
+    const Item* camera = w.get(kCamera);
+    CHECK(camera && camera->shape == 0x1B8 && camera->frame != 9);
+    if (!camera) return;
+    // Its screen place (lighting space projection, the view's corner aside).
+    const float cx = float(world_from_usecode(camera->x)), cy = float(world_from_usecode(camera->y));
+    const float cam_sx = (cx - cy) * 0.25f, cam_sy = (cx + cy) * 0.125f - float(camera->z);
+    Surface8 screen(Game::kScreenWidth, Game::kScreenHeight);
+    std::vector<std::uint32_t> argb;
+    auto frame = [&] {
+        game.update(kFrameUs);
+        game.render(screen);
+        game.render_lit(screen, argb);
+    };
+    frame();
+    apply_damage(game.kernel(), w, game.animations(), kCamera, 1, 0, 200, 2);
+    // The blast's smoke, a few frames on: its middle on the screen.
+    float sx = 0, sy = 0;
+    int blast = 0;
+    for (int f = 0; f < 6; ++f) frame();
+    for (const PuffState& p : game.lighting()->puffs_shown()) {
+        if (p.grey != 0.3f) continue;  // the explosion's puffs
+        sx += (p.centre.x - p.centre.y) * 0.25f;
+        sy += (p.centre.x + p.centre.y) * 0.125f - p.centre.z / kLightZScale;
+        ++blast;
+    }
+    if (blast) sx /= blast, sy /= blast;
+    std::printf("camera smoke: %d blast puffs, middle %+.0f %+.0f px from the camera\n", blast, sx - cam_sx,
+                sy - cam_sy);
+    CHECK(blast == 6);
+    CHECK(std::abs(sx - cam_sx) < 20 && sy - cam_sy < -10 && sy - cam_sy > -70);
+    CHECK(w.get(kCamera) && w.get(kCamera)->frame == 9);
+    // Long after: no blast left, a wisp rising from the camera.
+    for (int f = 0; f < 600; ++f) frame();
+    int wisps = 0, blasts = 0;
+    for (const PuffState& p : game.lighting()->puffs_shown()) {
+        if (p.grey == 0.3f) ++blasts;
+        const float px = (p.centre.x - p.centre.y) * 0.25f, py = (p.centre.x + p.centre.y) * 0.125f - p.centre.z / kLightZScale;
+        if (p.feature == 9 && std::abs(px - cam_sx) < 16 && py < cam_sy && py > cam_sy - 80) ++wisps;
+    }
+    std::printf("camera smoke: %d wisp puffs over the broken camera\n", wisps);
+    CHECK(blasts == 0 && wisps >= 2);
+}
+
+// Bug (issue #24): in mission 3, using the computer with the files (0x4FF,
+// item 2580 of the save) showed its schematic MVA03B for a blink only. The
+// key that uses it (Enter or Space of the selection mode) is one of those
+// that stop a movie (1468:2869), and the overlay starts 2 frames after the
+// press, before a finger lifts. The movie must play on until a key is
+// pressed again; then EVENT waits and the transmission 3H follows.
+void test_movie_ignores_held_use_key(const std::filesystem::path& data) {
+    constexpr ObjId kComputer = 2580;
+    for (const std::uint8_t key : {std::uint8_t{0x1C}, std::uint8_t{0x39}}) {
+        Game game(data, test_saves(data));
+        game.load_save_file(test_saves(data) / "issue24-schema-mission3-ordinateur.sav");
+        World& w = game.world();
+        CHECK(w.get(kComputer) && w.get(kComputer)->shape == 0x4FF);
+        game.key(key, false, true, 0, key == 0x1C ? '\r' : ' ');
+        use_item(w, kComputer);
+        int frames = 0, last = 0;
+        bool overlay = false;
+        for (int f = 0; f < 60 * 25 && last <= 200 && (frames == 0 || game.movie()); ++f) {
+            if (f == 6) game.key(key, false, false, 0);  // 100 ms
+            game.update(kFrameUs);
+            if (const MoviePlayer* m = game.movie()) {
+                overlay = overlay || m->kind() == MovieKind::kOverlay;
+                last = m->frame();
+                ++frames;
+            }
+        }
+        std::printf("held use key 0x%02X: overlay %d, %d frames on screen, movie frame %d\n", key, overlay, frames,
+                    last);
+        CHECK(overlay && last > 200 && game.movie());
+        // A new press still stops it.
+        game.key(key, false, true, 0);
+        game.update(kFrameUs);
+        game.key(key, false, false, 0);
+        CHECK(!game.movie());
+        CHECK(game.machine().faults().empty());
+    }
+}
+
 // Bug: back at the rebel base after mission 1, Escape crashed the game.
 // The map switch (MainActor::I_switchMap, GAMEPAL_1028_03f6) failed every
 // process, the Controller included, which the game still sent the keys to.
@@ -2620,6 +2714,43 @@ void test_keypad_door_after_reload(const std::filesystem::path& data) {
         CHECK(std::filesystem::exists(autosave) && frames < 300);
         CHECK(door->x == kOpenX && !(door->flags & 0x1000));
     }
+}
+
+// Issue #26: the reporter's save (map 40, the base) was made with the player
+// in the range of TRIGEGG 7516 (55, by the teleporter room), its door 433
+// (0x4D8) open, raised to z 114. TRIGGER toggles the door, on the egg's
+// hatch (event 7) as on its way out (0x15). The original saves the
+// EggHatcher with its "hatched" field (+0x50, 1098:0718); the port, which
+// rebuilds the fast area instead, hatched the egg a second time on load:
+// the door shut by the player, then opened as he went away. It stays open
+// now, shuts when he leaves and opens when he comes back.
+void test_egg_hatched_before_save(const std::filesystem::path& data) {
+    constexpr ObjId kEgg = 7516, kDoor = 433;
+    Game game(data, test_saves(data));
+    game.load_save_file(test_saves(data) / "issue26-porte-teleporteur-inversee.sav");
+    World& w = game.world();
+    const Item* door = w.get(kDoor);
+    const Item* player = w.get(1);
+    CHECK(w.current_map() == 40 && w.get(kEgg) && door && door->shape == 0x4D8);
+    if (!door || !player) return;
+    const std::int32_t px = player->x, py = player->y, pz = player->z;
+    auto run = [&](int frames) {
+        for (int f = 0; f < frames; ++f) game.update(kFrameUs);
+    };
+    // Open: last frame, raised (saved on its way up, at z 114; 150 at the top).
+    auto open = [&] { return door->frame == 9 && door->z >= 114; };
+    run(120);
+    const bool open_on_load = open();
+    w.move_item(1, px - 400, py, pz);  // out of the egg's 160 units
+    run(120);
+    const bool shut_away = door->z == 16 && door->frame == 0;
+    w.move_item(1, px, py, pz);
+    run(120);
+    const bool open_back = open();
+    std::printf("egg hatched before the save: door open on load %d, shut away %d, open back %d (z %d)\n",
+                open_on_load, shut_away, open_back, door->z);
+    CHECK(open_on_load && shut_away && open_back);
+    CHECK(game.machine().faults().empty());
 }
 
 // Status 0x1000 saved while a process of the item's class ran (the
@@ -4791,9 +4922,17 @@ void test_turrets(const std::filesystem::path& data) {
         std::printf("turrets: in the band, drawn %d, in zone %d, %d shots, %zu frames\n", drawn, fights, shots,
                     frames.size());
         CHECK(drawn && !fights && shots == 0 && frames.size() > 2);
-        // Back in the combat zone, it shoots.
+        // Back in the combat zone, it shoots: its first shot within 30 s
+        // (its sweep and waits are random: 8 to 12 s from this save), then
+        // at least 5 in the next 15 s.
         w.set_camera(gun->x, gun->y, gun->z & 0xFF);
-        CHECK(count_shots(game, 900) >= 5);
+        int first = -1;
+        for (int f = 0; f < 1800 && first < 0; ++f) {
+            if (count_shots(game, 1) > 0) first = f;
+        }
+        const int burst = first < 0 ? 0 : count_shots(game, 900);  // the first one still flies: counted
+        std::printf("turrets: back in the zone, first shot after %d frames, %d shots in 15 s\n", first, burst);
+        CHECK(first >= 0 && burst >= 5);
         CHECK(game.machine().faults().empty() && game.machine().unbound_intrinsic_calls().empty());
     }
 }
@@ -6551,8 +6690,20 @@ int main(int argc, char** argv) {
         test_keypad_door_after_reload(data);
         return failures ? 1 : 0;
     }
+    if (argc > 2 && std::string(argv[2]) == "--egg-hatched") {
+        test_egg_hatched_before_save(data);
+        return failures ? 1 : 0;
+    }
     if (argc > 2 && std::string(argv[2]) == "--saved-busy") {
         test_saved_busy_items(data);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--camera-smoke") {
+        test_camera_smoke(data);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--held-use-key-movie") {
+        test_movie_ignores_held_use_key(data);
         return failures ? 1 : 0;
     }
     if (argc > 2 && std::string(argv[2]) == "--courier-keycard") {
@@ -6694,6 +6845,7 @@ int main(int argc, char** argv) {
     test_keypad(data);
     test_autosave(data);
     test_keypad_door_after_reload(data);
+    test_egg_hatched_before_save(data);
     test_saved_busy_items(data);
     test_monitor(data);
     test_security_camera(data);
@@ -6763,6 +6915,8 @@ int main(int argc, char** argv) {
     test_editor_mod(data);
     test_movies(data);
     test_back_to_base(data);
+    test_movie_ignores_held_use_key(data);
+    test_camera_smoke(data);
     test_mission2_final_scene(data);
     test_mission2_npc_teleport(data);
     // The tests that play on the test saves autosave into them (Game::kAutoSave): not kept.

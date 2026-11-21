@@ -39,6 +39,7 @@
 #include "core/weapon_overlay.hpp"
 #include "engine/world/casings.hpp"
 #include "engine/world/damage_marks.hpp"
+#include "engine/world/lighting.hpp"
 #include "engine/world/render.hpp"
 #include "engine/world/world.hpp"
 #include "engine/world/world_mouse.hpp"
@@ -170,6 +171,14 @@ public:
     // shows more around the camera, and the menus, screens, films and cursor
     // stay 640 x 480 in the middle (see ui_x / ui_y for the mouse).
     void render(Surface8& screen, RenderStats* stats = nullptr);
+    // Port addition (GameConfig::lighting): the screen just rendered, with the
+    // world lit in 3D, in `argb` (0xAARRGGBB). False when there is nothing to
+    // light (option off, cutscene, menu): show `screen` as it is.
+    bool render_lit(const Surface8& screen, std::vector<std::uint32_t>& argb);
+    // The GPU that shades the lighting (null: the processor). Kept by the caller.
+    void set_lighting_gpu(LightingGpu* gpu);
+    // The 3D lighting (null until first switched on), for the tests.
+    const WorldLighting* lighting() const { return lighting_.get(); }
     // Where the 640 x 480 area starts in the last rendered screen; the mouse
     // coordinates the game takes are relative to it.
     int ui_x() const { return ui_x_; }
@@ -425,6 +434,9 @@ private:
     WeaponOverlay weapon_overlay_;
     DamageMarks damage_marks_;  // port addition (GameConfig::impact_marks)
     Casings casings_;           // port addition (GameConfig::casings)
+    // Port addition (GameConfig::lighting), made when first switched on.
+    std::unique_ptr<WorldLighting> lighting_;
+    LightingGpu* lighting_gpu_ = nullptr;
     Palette palette_;
     UsecodeFile usecode_;
     ShapeCache shapes_;
@@ -479,12 +491,16 @@ private:
     // Player field +0xC2: the movie resumes the colour cycling when it ends
     // (DS:5FFE clear when it started).
     bool movie_resumes_cycle_ = true;
+    // Port addition (issue #24): the keys that stop a movie (Escape, Space,
+    // Enter) already held when it started, ignored until they are released.
+    std::array<bool, 3> movie_keys_held_at_start_{};
     // A movie of Weasel's shop: the game palette and the colour cycling come
     // back after it (13E0:0CD8).
     bool weasel_movie_ = false;
     bool auto_save_names_ = false;     // set_auto_save_names
     bool christmas_ = false;           // set_christmas
     bool weasel_intro_played_ = false;  // DS:5ECF
+    bool restoring_fast_area_ = false;  // load_save_file rebuilds the saved fast area
     // The game process's pass count (type 0x245, +0x40 / +0x44) and its value
     // at the last animation pass of the scenery (DS:2D3B), item_anim.hpp.
     std::uint32_t game_passes_ = 0;
