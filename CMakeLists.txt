@@ -37,6 +37,7 @@ endif()  # NOT CRUSADER_LIBRARIES_ONLY
 
 # Game data formats, no platform dependency.
 add_library(crusader_core
+  src/core/background_writer.cpp
   src/core/flex.cpp
   src/core/flex_file.cpp
   src/core/shape_reach.cpp
@@ -136,8 +137,10 @@ add_library(crusader_engine
   src/engine/ui/movie_player.cpp
   src/engine/world/auto_firer.cpp
   src/engine/world/render.cpp)
-# The lighting (lighting.cpp) runs on worker threads: -pthread on older glibc.
+# The lighting (lighting.cpp) runs on worker threads, the background writer
+# (core/background_writer.cpp) on one: -pthread on older glibc.
 find_package(Threads REQUIRED)
+target_link_libraries(crusader_core PUBLIC Threads::Threads)
 target_link_libraries(crusader_engine PUBLIC crusader_core Threads::Threads)
 
 if(CRUSADER_LIBRARIES_ONLY)
@@ -325,6 +328,8 @@ target_link_libraries(shape_draw_tests PRIVATE crusader_core)
 
 add_executable(shape_stream_tests e2e/shape_stream_tests.cpp)
 target_link_libraries(shape_stream_tests PRIVATE crusader_game)
+add_executable(background_save_tests e2e/background_save_tests.cpp)
+target_link_libraries(background_save_tests PRIVATE crusader_game)
 
 add_executable(display_list_tests e2e/display_list_tests.cpp)
 target_link_libraries(display_list_tests PRIVATE crusader_game)
@@ -338,7 +343,7 @@ target_include_directories(game_tests PRIVATE e2e)
 target_compile_definitions(game_tests PRIVATE CRUSADER_TEST_SAVES="${CRUSADER_TEST_SAVES_DIR}")
 
 if(CRUSADER_GAME_DATA_TESTS)
-    foreach(t core_data_tests shape_draw_tests shape_stream_tests half_render_tests display_list_tests world_data_tests audio_data_tests editor_data_tests game_tests)
+    foreach(t core_data_tests shape_draw_tests shape_stream_tests background_save_tests half_render_tests display_list_tests world_data_tests audio_data_tests editor_data_tests game_tests)
         add_test(NAME ${t} COMMAND ${t} ${CRUSADER_DATA_DIR})
     endforeach()
 endif()

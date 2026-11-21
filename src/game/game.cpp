@@ -567,6 +567,7 @@ void Game::load_save(int slot) { load_save_file(save_dir_ / ("SAVEGAME." + std::
 
 // @orig 1058:02F1 1028:0000
 void Game::load_save_file(const std::filesystem::path& path) {
+    finish_saves();
     reset_world();
     const auto save = FlexArchive::open(path);
     world_->load_saved_items(save);
@@ -711,6 +712,14 @@ void Game::load_save_file(const std::filesystem::path& path) {
 
 // @orig 1058:0115
 void Game::save_game(int slot) {
+    finish_saves();
+    auto bytes = saved_game(slot);
+    std::filesystem::create_directories(save_dir_);
+    write_file_replacing(save_dir_ / ("SAVEGAME." + std::to_string(slot)), bytes);
+}
+
+// @orig 1058:0115
+std::vector<std::uint8_t> Game::saved_game(int slot) {
     if (slot < 1 || slot > LoadScreen::kNames) throw std::runtime_error("no save slot " + std::to_string(slot));
     FlexWriter flex(1024);
     auto bytes = [](std::initializer_list<std::uint32_t> words, std::size_t width) {
@@ -753,9 +762,13 @@ void Game::save_game(int slot) {
     // Entries 70, 71 (STDINT_1200_0311): the music track and its flags.
     flex.add(70, bytes({static_cast<std::uint32_t>(audio_ ? audio_->music.current() : 0)}, 2));
     flex.add(71, bytes({static_cast<std::uint32_t>(audio_ ? audio_->music.flags() : 0)}, 2));
-    const auto& dir = save_dir_;
-    std::filesystem::create_directories(dir);
-    flex.write(dir / ("SAVEGAME." + std::to_string(slot)));
+    return flex.bytes();
+}
+
+// @orig none: port only (slow media)
+void Game::set_background_saves(bool on) {
+    if (on && !save_writer_) save_writer_ = std::make_unique<BackgroundWriter>();
+    if (!on) save_writer_.reset();  // writes what is queued first
 }
 
 // @orig none: the original reads shapes through its own memory manager
@@ -788,7 +801,12 @@ void Game::autosave() {
     }
     try {
         set_save_name(kAutoSave, tr("AUTOSAVE"));
-        save_game(kAutoSave);
+        if (save_writer_) {
+            std::filesystem::create_directories(save_dir_);
+            save_writer_->write(save_dir_ / ("SAVEGAME." + std::to_string(kAutoSave)), saved_game(kAutoSave));
+        } else {
+            save_game(kAutoSave);
+        }
         autosave_icon_us_ = kAutosaveIconUs;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "autosave: %s\n", e.what());
@@ -840,6 +858,7 @@ void Game::draw_autosave_icon(Surface8& screen) {
 
 // @orig none: save directory of the port (tests)
 void Game::set_save_dir(const std::filesystem::path& dir) {
+    finish_saves();
     save_dir_ = dir;
     save_names_ = LoadScreen::read_names(dir);
 }
@@ -974,6 +993,7 @@ void Game::update(std::uint32_t elapsed_us) {
     if (pending_load_) {
         const int slot = pending_load_;
         pending_load_ = 0;
+        finish_saves();
         if (std::filesystem::exists(save_dir_ / ("SAVEGAME." + std::to_string(slot)))) load_save(slot);
         if (pending_notice_) {
             // F4: the notice once the game is loaded, in the menu mode again.
@@ -1548,6 +1568,7 @@ bool Game::function_key(std::uint16_t code) {
         // Port addition: load the autosave (slot 12, SAVEGAME.12), as F4 loads
         // the quick save.
         if (s.cru_stasis || s.controlled_npc != 1) return false;
+        finish_saves();
         if (!std::filesystem::exists(save_dir_ / ("SAVEGAME." + std::to_string(kAutoSave)))) return false;
         ask(ShapeDialog::kQuickLoadQuestion, 0x107, [this] {
             if (audio_) audio_->stop_all();

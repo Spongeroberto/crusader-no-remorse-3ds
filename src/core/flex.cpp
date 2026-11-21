@@ -79,8 +79,10 @@ std::vector<std::uint8_t> FlexWriter::bytes() const {
 }
 
 // @orig none: file writing of the port
-void FlexWriter::write(const std::filesystem::path& path) const {
-    const auto data = bytes();
+void FlexWriter::write(const std::filesystem::path& path) const { write_file_replacing(path, bytes()); }
+
+// @orig none: file writing of the port
+void write_file_replacing(const std::filesystem::path& path, std::span<const std::uint8_t> data) {
     std::filesystem::path tmp = path;
     tmp += ".tmp";
     {
