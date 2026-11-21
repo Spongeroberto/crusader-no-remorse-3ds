@@ -237,6 +237,7 @@ private:
     void liquid_lights(std::vector<PointLight>& lights) const;
     void steam(std::vector<PuffState>& out) const;
     void smoulder(std::vector<PuffState>& out) const;
+    std::optional<std::pair<float, float>> hole(std::uint16_t shape, std::uint32_t frame, std::uint32_t whole) const;
     void spawn_smoke();
     bool on_surface(const Vec3& p) const;
     void puff_states(std::vector<PuffState>& out) const;
@@ -245,7 +246,7 @@ private:
     Vec3 shade_point(int c, const Vec3& p, const Vec3& n, ObjId self, const LightingOptions& opt,
                      const std::vector<std::uint32_t>& tile_lights,
                      const std::vector<std::vector<std::uint32_t>>* tile_boxes, bool liquid = false) const;
-    Vec3 halo_over(Vec3 colour, int px, int py, bool clip, float surface_s, ObjId self,
+    Vec3 halo_over(Vec3 colour, int px, int py, bool clip, float surface_s, ObjId self, bool billboard,
                    const std::vector<std::uint32_t>& ids) const;
     Vec3 smoke_over(Vec3 colour, int px, int py, bool clip, float surface_s, const LightingOptions& opt,
                     const std::vector<std::uint32_t>& puffs) const;
@@ -272,6 +273,7 @@ private:
     std::vector<std::int32_t> owner_;     // index in list_, -1 none
     std::vector<std::uint8_t> actor_;     // per list_ item: a character (billboard)
     std::vector<std::uint8_t> liquid_;    // per list_ item: a liquid's surface (glows)
+    std::vector<std::uint8_t> glows_;     // per list_ item: a light itself (an arc), drawn as it is
     std::vector<std::uint8_t> emissive_;  // flash / explosion pixel
     std::vector<Vec3> pos_, nrm_;         // CPU shading only
 
@@ -296,6 +298,8 @@ private:
     std::vector<SmokePuff> puffs_;
     std::vector<PuffState> puff_now_;  // far to near
     std::unordered_map<ObjId, std::uint16_t> sprites_seen_;  // sprite item -> shape
+    // A leak's hole by shape << 16 | frame << 8 | whole frame (hole()).
+    mutable std::unordered_map<std::uint32_t, std::optional<std::pair<float, float>>> holes_;
     std::unordered_map<ObjId, Vec3> shot_start_;  // projectile -> where it was first seen
     std::uint32_t puff_serial_ = 0;
 
