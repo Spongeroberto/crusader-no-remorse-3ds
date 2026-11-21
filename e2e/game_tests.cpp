@@ -3746,6 +3746,29 @@ void test_stick_aim_floor_below(const std::filesystem::path& data) {
     CHECK(game.machine().faults().empty());
 }
 
+// Port addition (World::hold_to_aim): the stop of a run (0x27) enters the
+// aiming mode at its end, as in the original (1158:2E66), unless the aiming
+// mode is a held button's (the 3DS's R): the crosshair then stays away.
+void test_run_stop_hold_to_aim(const std::filesystem::path& data) {
+    for (const bool hold : {false, true}) {
+        Game game(data, test_saves(data));
+        game.load_save(1);
+        game.set_hold_to_aim(hold);
+        World& w = game.world();
+        game.update(kFrameUs);
+        do_anim(game.kernel(), w, game.animations(), 1, 0, kDirCurrent);  // stood up, aim mode left
+        settle(game);
+        CHECK(!w.state.aim.active);
+        do_anim(game.kernel(), w, game.animations(), 1, 0x26, kDirCurrent);  // a run
+        do_anim(game.kernel(), w, game.animations(), 1, 0x27, kDirCurrent);  // and its stop
+        settle(game);
+        std::printf("run stop, hold to aim %d: last action 0x%X, aim mode %d\n", hold, last_action(game),
+                    w.state.aim.active);
+        CHECK(w.state.aim.active == !hold);
+        CHECK(game.machine().faults().empty());
+    }
+}
+
 // Port addition: pushing the aim stick of directional aiming draws the weapon
 // by itself (aim_mode.cpp, aim_at_angle), without the fire key first.
 void test_aim_stick_draws(const std::filesystem::path& data) {
@@ -6714,6 +6737,10 @@ int main(int argc, char** argv) {
         test_processes_end_with_their_item(data);
         return failures ? 1 : 0;
     }
+    if (argc > 2 && std::string(argv[2]) == "--run-stop-aim") {
+        test_run_stop_hold_to_aim(data);
+        return failures ? 1 : 0;
+    }
     if (argc > 2 && std::string(argv[2]) == "--mission7-bomb") {
         test_mission7_fusion_pack(data);
         return failures ? 1 : 0;
@@ -6904,6 +6931,7 @@ int main(int argc, char** argv) {
     test_precise_aim(data);
     test_aim_mode(data);
     test_aim_stick_draws(data);
+    test_run_stop_hold_to_aim(data);
     test_stick_aim_floor_below(data);
     test_crosshair_shot_height(data);
     test_player_combat_flag(data);

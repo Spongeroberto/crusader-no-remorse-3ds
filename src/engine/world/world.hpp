@@ -727,6 +727,11 @@ public:
         if (!on) glide_ = {};
     }
     bool stick_moves() const { return stick_moves_; }
+    // Port addition, for a hold-to-aim button (the 3DS's R): the aiming mode
+    // is the button's alone, so a run that stops (action 0x27) does not enter
+    // it at its end as the original does (ActorAnimProcess::on_terminate).
+    void set_hold_to_aim(bool on) { hold_to_aim_ = on; }
+    bool hold_to_aim() const { return hold_to_aim_; }
     // Port addition, with stick_moves: `id` has just been put (dx, dy, dz)
     // away from where it was drawn (ANIMPRIM.C 016F moves the controlled NPC
     // aside up to 80 units at once). It is drawn there still, then back at
@@ -902,6 +907,7 @@ private:
     std::map<ObjId, std::uint16_t> death_loot_;
     bool fix_original_bugs_ = false;
     bool stick_moves_ = false;
+    bool hold_to_aim_ = false;
     struct Glide {
         ObjId id = 0;
         std::int32_t dx = 0, dy = 0, dz = 0;  // from the place to where the glide starts
