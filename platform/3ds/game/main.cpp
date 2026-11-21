@@ -507,10 +507,10 @@ int main() {
         game.config().follow_player = true;
         game.config().directional_move = true;
         game.config().draw_on_aim = true;  // R draws the weapon to aim
+        game.set_menu_quit_shown(false);   // HOME closes the game; before the start-up menu
         game.start_up();
         game.set_cursor_drawn(false);  // no pointer: menus are played with keys
         game.set_status_bar_drawn(false);  // the bottom screen shows it
-        game.set_menu_quit_shown(false);   // HOME closes the game
         // Destroyed before the game: its thread reads the game's mixer.
         std::unique_ptr<ctr::Audio> audio;
         if (game.audio()) {
