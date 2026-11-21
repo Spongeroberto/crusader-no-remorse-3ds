@@ -1125,7 +1125,7 @@ void Game::start_movie(const std::string& name, MovieKind kind, Surface8 screen)
     if (config_.subtitles && kind != MovieKind::kOverlay) {
         subtitles = load_movie_subtitles(files_.find(base + ".TXT"), fonts_, MoviePlayer::kSubtitleFont);
     }
-    movie_ = std::make_unique<MoviePlayer>(std::move(*movie), kind, std::move(subtitles), config_.big_video,
+    movie_ = std::make_unique<MoviePlayer>(std::move(*movie), kind, std::move(subtitles), config_.big_video || movies_doubled_,
                                            std::move(screen), world_->state.screen_palette, gumps_, fonts_);
     // 1468:3ABC: the colour cycling pauses.
     world_->state.cycle_paused = true;
@@ -1160,7 +1160,7 @@ void Game::update_movie(std::uint32_t elapsed_us) {
     if (movie_->take_sound_start() && audio_) {
         movie_sounds_.push_back(movie_->sound());
         if (movie_sounds_.size() > 2) movie_sounds_.pop_front();
-        const std::vector<std::int8_t>& pcm = movie_sounds_.back();
+        const std::vector<std::int8_t>& pcm = *movie_sounds_.back();
         audio_->mixer.play(0, SoundSample{pcm, 0, 0, AviMovie::kAudioRate}, AsylumMixer::kMaxVolume + 1, 0, false);
     }
     world_->state.screen_palette = movie_->palette();
