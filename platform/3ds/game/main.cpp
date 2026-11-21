@@ -9,6 +9,7 @@
 // sdmc:/3ds/crusader. Sound and music go through the DSP (ctr_audio.hpp).
 
 #include "core/pad_config.hpp"
+#include "core/language.hpp"
 #include "engine/input/keyboard.hpp"
 #include "engine/ui/inventory_panel.hpp"
 #include "ctr_audio.hpp"
@@ -490,6 +491,43 @@ private:
     bool drawn_ = false;
 };
 
+// A map's shapes are read from the card when it loads (Game's
+// stream_shapes), about two seconds in which no frame is drawn: the top
+// screen says so, in light grey on black, twice the help text's size. The
+// next frame drawn replaces it.
+void show_loading(const Game& game) {
+    constexpr std::uint8_t kInk = 1, kNoInk = 0xFF;
+    constexpr int kPen = 12, kScale = 2;
+    const std::string text = tr("LOADING");
+    TextWriter writer(game.fonts(), kHelpFont);
+    Surface8 line(200, 2 * kPen, kNoInk);
+    writer.print(line, 0, kPen, text);
+    const int width = std::min(writer.measure(text).width, line.width);
+
+    Surface8 screen = Surface8::half(800, 480);  // stored at the top screen's 400 x 240
+    const int x0 = (screen.stored_width() - kScale * width) / 2;
+    const int y0 = (screen.stored_height() - kScale * line.height) / 2;
+    for (int r = 0; r < line.height; ++r) {
+        for (int c = 0; c < width; ++c) {
+            if (line.row(r)[c] == kNoInk) continue;
+            for (int dy = 0; dy < kScale; ++dy) {
+                std::fill_n(screen.row(y0 + kScale * r + dy) + x0 + kScale * c, kScale, kInk);
+            }
+        }
+    }
+    Palette palette;  // black
+    palette.colors[kInk] = {216, 216, 216};
+    ctr::draw_to_top_screen(screen, palette);
+    // In stereoscopic 3D both eyes show it, flat.
+    if (gfxIs3D()) {
+        ctr::detail::draw_top_eye(GFX_RIGHT, screen.stored_width(), screen.stored_height(), palette,
+                                  [&](int x, int y) { return screen.row(y)[x]; });
+    }
+    gfxFlushBuffers();
+    gfxSwapBuffers();
+    gspWaitForVBlank();
+}
+
 void wait_for_start() {
     std::printf("\nPress START to exit.\n");
     while (aptMainLoop()) {
@@ -539,6 +577,7 @@ int main() {
         }
         Controls controls(game);
         BottomScreen bottom(game);
+        game.set_loading_notice([&game] { show_loading(game); });
         if (audio && !audio->dsp_ok()) bottom.set_notice("No sound: run DSP1 once");
         std::string stats;
         Surface8 screen = Surface8::half(800, 480);

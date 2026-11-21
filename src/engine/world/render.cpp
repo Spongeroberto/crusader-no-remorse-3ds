@@ -73,6 +73,14 @@ void ShapeCache::load(std::span<const std::uint16_t> shapes) {
 }
 
 // @orig none: shapes read on request
+std::size_t ShapeCache::missing(std::span<const std::uint16_t> shapes) const {
+    if (!file_) return 0;
+    std::size_t n = 0;
+    for (std::uint16_t s : shapes) n += s < entries_.size() && !entries_[s];
+    return n;
+}
+
+// @orig none: shapes read on request
 void ShapeCache::keep_only(std::span<const std::uint16_t> shapes) {
     if (!file_) return;
     std::vector<bool> keep(entries_.size());
