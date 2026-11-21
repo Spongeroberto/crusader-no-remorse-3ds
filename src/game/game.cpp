@@ -537,6 +537,25 @@ bool Game::weapon_out() const {
     return npc != 0 && weapon_drawn(*world_, npc);
 }
 
+// @orig none: port-only hold-to-aim
+double Game::facing_screen_deg() const {
+    const ObjId npc = world_ ? world_->state.controlled_npc : 0;
+    if (npc == 0) return 0;
+    // The keypad's screen directions (avatar_mover.hpp): 9 (up-right) is
+    // direction 0, 6 (right) is 2, 8 (up) is 14; 22.5 degrees clockwise each.
+    return 45.0 - 22.5 * (world_->npc_direction(npc) & 0xF);
+}
+
+// @orig none: port-only hold-to-aim
+void Game::leave_aim() {
+    aim_stick_ = false;
+    if (!world_) return;
+    drop_stick_crosshair(*world_);
+    if (!world_->state.aim.active) return;
+    leave_aim_mode(*kernel_, *world_);
+    if (world_->hooks().reset_fire) world_->hooks().reset_fire();
+}
+
 // @orig none: the slot's file in the save directory
 void Game::load_save(int slot) { load_save_file(save_dir_ / ("SAVEGAME." + std::to_string(slot))); }
 

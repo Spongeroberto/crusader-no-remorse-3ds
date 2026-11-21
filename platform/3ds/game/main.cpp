@@ -55,9 +55,9 @@ const PadAction* action(int id) { return &kPadActions[static_cast<std::size_t>(i
 constexpr PadAction kYes = {"YES", 0x18, false, 'o'};
 
 // In play. The circle pad moves, and runs when pushed far out (see
-// Controls::move and Controls::run), so R is free. Weapons and items are
-// picked on the touch screen (Controls::touch), so Y and D-pad left / right
-// are free too.
+// Controls::move and Controls::run). R held aims (Controls::aim); D-pad left /
+// right step aside, or roll on a double tap (Controls::side_tap). Weapons
+// and items are picked on the touch screen (Controls::touch), so Y is free.
 const std::array<const PadAction*, kControlCount> kPlay = {
     action(kPadFire), action(kPadJump), action(kPadSelect), nullptr,
     action(kPadCrouch), nullptr, action(kPadMenu), action(kPadConfirm),
@@ -97,15 +97,35 @@ public:
             (held & KEY_L) != 0, (held & KEY_R) != 0, (held & KEY_START) != 0, (held & KEY_SELECT) != 0,
             (held & KEY_DUP) != 0, (held & KEY_DDOWN) != 0, (held & KEY_DLEFT) != 0, (held & KEY_DRIGHT) != 0,
         };
+        // Last frame's step or roll comes up first.
+        if (pulsed_) {
+            key(pulsed_->scancode, pulsed_->extended, false);
+            if (pulsed_->modifier) key(pulsed_->modifier, false, false);
+            pulsed_ = nullptr;
+        }
+        const double t = now_us();
         for (int c = 0; c < kControlCount; ++c) {
-            if (now[c] && !held_[c]) press(c, menu ? kMenu[c] : kPlay[c]);
+            if (now[c] && !held_[c]) {
+                press(c, menu ? kMenu[c] : kPlay[c]);
+                if (!menu && (c == kPadLeft || c == kPadRight)) side_tap(c == kPadLeft ? 0 : 1, t);
+            }
             if (!now[c] && held_[c]) release(c);
             held_[c] = now[c];
         }
+        if (menu) side_ = -1;
+        else if (side_ >= 0 && t >= side_until_) {
+            pulse(action(side_ == 0 ? kPadStepLeft : kPadStepRight));
+            side_ = -1;
+        }
+        aim(!menu && now[kR], pad);
         if (menu) {
             move(-1);  // no move key held under a menu
             run(false);
             arrow(direction(pad, 4, arrow_dir_));
+        } else if (aiming_) {
+            arrow(-1);
+            move(-1);  // the circle pad aims instead
+            run(false);
         } else {
             arrow(-1);
             const int dir = direction(pad, 8, move_dir_);
@@ -157,6 +177,57 @@ public:
 
 private:
     static constexpr int kTries = 30;
+    // How long a D-pad left / right tap waits for a second one: two taps
+    // roll, one steps aside once this has passed. A step cannot go at once
+    // and become a roll on the second tap: the game drops a key pressed
+    // while the player is busy (AvatarMover), so the roll would be lost.
+    static constexpr double kDoubleTapUs = 180'000;
+
+    // A D-pad left (0) or right (1) press at `t`.
+    void side_tap(int side, double t) {
+        if (side_ == side && t < side_until_) {
+            pulse(action(side == 0 ? kPadRollLeft : kPadRollRight));
+            side_ = -1;
+            return;
+        }
+        // A tap of the other side first lets the pending one step at once.
+        if (side_ >= 0) pulse(action(side_ == 0 ? kPadStepLeft : kPadStepRight));
+        side_ = side;
+        side_until_ = t + kDoubleTapUs;
+    }
+
+    // Pressed now (the modifier first), released at the next update(): the
+    // modifier is held for one frame only, so that it does not reach the
+    // repeats of a move key held meanwhile (Ctrl or Alt with a keypad key is
+    // another move).
+    void pulse(const PadAction* a) {
+        if (pulsed_) {
+            key(pulsed_->scancode, pulsed_->extended, false);
+            if (pulsed_->modifier) key(pulsed_->modifier, false, false);
+        }
+        if (a->modifier) key(a->modifier, false, true);
+        key(a->scancode, a->extended, true, a->ascii);
+        pulsed_ = a;
+    }
+
+    // R held: the circle pad points the weapon (Game::set_aim_stick, which
+    // draws it and enters the aiming mode) and the player stays put; with
+    // the pad near the centre the aim keeps its angle, straight ahead at
+    // first. Letting go ends the aiming mode at once.
+    void aim(bool on, const circlePosition& pad) {
+        if (on && !aiming_) aim_deg_ = game_.facing_screen_deg();
+        if (!on) {
+            if (aiming_) game_.leave_aim();
+            aiming_ = false;
+            return;
+        }
+        aiming_ = true;
+        const double len = std::hypot(static_cast<double>(pad.dx), static_cast<double>(pad.dy));
+        if (len > 40.0) {
+            aim_deg_ = std::atan2(static_cast<double>(pad.dy), static_cast<double>(pad.dx)) * 180.0 / 3.14159265358979;
+        }
+        game_.set_aim_stick(true, aim_deg_);
+    }
 
     // Pressed now, released at the next touch().
     void tap(const PadAction* a) {
@@ -256,6 +327,11 @@ private:
     int move_dir_ = -1;
     int arrow_dir_ = -1;
     bool running_ = false;
+    bool aiming_ = false;
+    double aim_deg_ = 0;
+    int side_ = -1;  // a D-pad left (0) or right (1) tap waiting for a second
+    double side_until_ = 0;
+    const PadAction* pulsed_ = nullptr;
     const PadAction* tapped_ = nullptr;
     InventoryPanel::Hit want_;
     int tries_ = 0;
@@ -263,12 +339,14 @@ private:
 
 // The controls in menus, in the font of the movie subtitles (light, for a
 // dark background).
-constexpr std::array<const char*, 13> kHelp = {
+constexpr std::array<const char*, 15> kHelp = {
     "Crusader: No Remorse (3DS port)",
     "Circle pad   move, push far to run",
     "A  fire           B  jump",
-    "X  select object",
-    "L  kneel",
+    "X  select object  L  kneel / stand",
+    "R  aim (hold, circle pad points)",
+    "D-pad left / right  step aside,",
+    "  twice: roll",
     "D-pad up  use item   down  medkit",
     "SELECT  use selected   START  menu",
     "Touch the equipment to pick a",
@@ -381,6 +459,7 @@ int main() {
         // directions (keypad keys, AvatarMover's directional mode).
         game.config().follow_player = true;
         game.config().directional_move = true;
+        game.config().draw_on_aim = true;  // R draws the weapon to aim
         game.start_up();
         game.set_cursor_drawn(false);  // no pointer: menus are played with keys
         game.set_status_bar_drawn(false);  // the bottom screen shows it

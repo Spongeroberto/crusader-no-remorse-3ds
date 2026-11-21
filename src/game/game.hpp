@@ -215,6 +215,13 @@ public:
         aim_stick_deg_ = screen_deg;
     }
     bool mouse_in_play() const { return !modal() && !movie_; }
+    // The controlled NPC's facing as a screen direction (degrees,
+    // counter-clockwise from east), for set_aim_stick to aim straight ahead.
+    double facing_screen_deg() const;
+    // Ends the aiming mode as a non-aiming action does (aim_after_do_anim):
+    // the crosshair goes and the fire state is reset. For a hold-to-aim
+    // button; the original has no key for it.
+    void leave_aim();
     // True in play while the controlled NPC has its weapon out. The controller
     // then strafes with the left stick while the right stick aims.
     bool weapon_out() const;
