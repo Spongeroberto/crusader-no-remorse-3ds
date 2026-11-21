@@ -13,6 +13,25 @@ constexpr std::size_t kShapeHeader = 6;
 constexpr std::size_t kFrameEntry = 8;
 constexpr int kMaxDimension = 4096;
 
+// The depth written with a run of n pixels (Surface8::attach_depth): every
+// opaque one gets its depth; translucent ones keep the depth of what they
+// cover. `step` walks the depth (+1, or -1 mirrored), `in_step` the source
+// pixels. The first pixel is (u, v) from the anchor in the picture, the next
+// ones `du` further along u (Surface8::set_depth).
+void write_depth(const Surface8& dst, std::uint8_t* out, int step, int n, const std::uint8_t* in, int in_step,
+                 bool fill, const XformTable* xform, int u, int du, int v) {
+    if (fill && xform && xform->translucent(*in)) return;
+    const int z = dst.depth_z(), height = dst.depth_height();
+    if (height <= 0 && (!xform || fill)) {
+        std::memset(step > 0 ? out : out - (n - 1), Surface8::depth_byte(z), n);
+        return;
+    }
+    for (int k = 0; k < n; ++k, u += du) {
+        if (xform && !fill && xform->translucent(in[k * in_step])) continue;
+        const int h = std::clamp(-v - (u < 0 ? -u : u) / 2, 0, std::max(height, 0));
+        out[k * step] = Surface8::depth_byte(z + h);
+    }
+}
 // @orig 1078:0116; frame header, the pixels are read by the asm blitters
 ShapeFrame parse_frame(std::span<const std::uint8_t> data, std::size_t i, std::size_t prefix) {
     const std::size_t entry = kShapeHeader + kFrameEntry * i;
@@ -160,6 +179,7 @@ void ShapeFrame::draw(Surface8& dst, int x, int y, bool mirrored, const XformTab
     const std::uint8_t* const data = rle.data();
     for (int ly = ly0; ly < ly1; ++ly) {
         std::uint8_t* const row = dst.row(top + ly);
+        std::uint8_t* const depth_row = dst.depth_row(top + ly);
         std::size_t p = lines[ly];
         int lx = 0;
         while (lx < width) {
@@ -212,6 +232,15 @@ void ShapeFrame::draw(Surface8& dst, int x, int y, bool mirrored, const XformTab
                         for (int k = 0; k < n; ++k) out[-k] = xform->blend(in[k], out[-k]);
                     }
                 }
+                if (depth_row) {
+                    const int v = top + ly - y;
+                    if (!mirrored) {
+                        write_depth(dst, depth_row + left + a, 1, n, in, 1, fill, xform, left + a - x, 1, v);
+                    } else {
+                        write_depth(dst, depth_row + left + width - 1 - a, -1, n, in, 1, fill, xform,
+                                    left + width - 1 - a - x, -1, v);
+                    }
+                }
             }
             p += fill ? 1 : len;
             lx += len;
@@ -242,6 +271,7 @@ void ShapeFrame::draw_half(Surface8& dst, int x, int y, bool mirrored, const Xfo
     const std::uint8_t* const data = rle.data();
     for (int ly = ly0; ly < ly1; ly += 2) {
         std::uint8_t* const row = dst.row((top + ly) / 2);
+        std::uint8_t* const depth_row = dst.depth_row((top + ly) / 2);
         std::size_t p = lines[ly];
         int lx = 0;
         while (lx < width) {
@@ -291,6 +321,15 @@ void ShapeFrame::draw_half(Surface8& dst, int x, int y, bool mirrored, const Xfo
                         for (int k = 0; k < n; ++k) out[-k] = in[2 * k];
                     } else {
                         for (int k = 0; k < n; ++k) out[-k] = xform->blend(in[2 * k], out[-k]);
+                    }
+                }
+                if (depth_row) {
+                    const int v = top + ly - y;
+                    if (!mirrored) {
+                        write_depth(dst, depth_row + (left + a) / 2, 1, n, in, 2, fill, xform, left + a - x, 2, v);
+                    } else {
+                        write_depth(dst, depth_row + (left + width - 1 - a) / 2, -1, n, in, 2, fill, xform,
+                                    left + width - 1 - a - x, -2, v);
                     }
                 }
             }

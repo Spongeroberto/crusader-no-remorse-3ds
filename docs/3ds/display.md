@@ -37,33 +37,42 @@ detail unevenly, which looked worse than the smaller, even picture. Things are s
 - **Pre-scaled assets** (shapes averaged when the CIA is built) remain an option for a
   smoother picture at the same speed, at the cost of exact testing.
 
-## Stereoscopic 3D (idea, not started)
+## Stereoscopic 3D
 
-The top screen can show stereo 3D (every model except the 2DS). Each item's height `z`
-gives a natural depth: the player's floor at the screen, higher floors and tall objects
-out towards the viewer, lower floors into the screen, so stairs and multi-level rooms get
-real depth.
+**Built (2026-11-21), on while the 3D slider is up.** Each pixel's height gives its
+depth: the player's floor at the screen, higher floors and the tops of walls out
+towards the viewer, lower floors into the screen.
 
-**Drawing the picture twice is too slow** on a classic 3DS: rendering is already most of
-the frame. The plan instead:
+**Drawing the picture twice is too slow** on a classic 3DS, so:
 
-1. The blitter writes each item's depth into a one-byte-per-pixel depth buffer as it draws
-   (a small cost per pixel). The colour pixels must stay byte-identical, which
-   `e2e/shape_draw_tests.cpp` checks.
-2. The left eye shows the normal picture.
-3. The right eye is made from it in one pass over 400×240: each pixel shifted sideways by
-   its depth, the few gaps filled from the neighbouring pixel. Shifts are a few pixels,
-   so the gaps stay tiny. Expected cost: a few milliseconds, not a second render.
-4. The 3D slider scales the shift; at zero the second eye is skipped, so 2D costs nothing.
+1. `Surface8::attach_depth` adds a byte per pixel. While it is attached, the blitter
+   writes each opaque pixel's depth as it draws (translucent pixels keep what they
+   cover). The colour pixels stay byte-identical: `e2e/shape_draw_tests.cpp` checks
+   colours and depth against a reference, with no depth, flat depth and box depth.
+2. Each item is drawn as its box (`Surface8::set_depth`): a pixel `(u, v)` from the
+   item's anchor is at height `-v - |u|/2` on a front face, at most the box's height
+   (then it is on the top). Walls therefore rise from the floor to the floor above
+   instead of standing as flat cards at their base, which split them from the roof
+   tiles. Overlays drawn with an item (weapon, marks, casings) are flat at its middle;
+   menus, movies, messages and the selection frame stay at the screen.
+3. The left eye shows the normal picture. The right eye is made from it in one pass
+   over 400×240 (`ctr::draw_right_eye`): each pixel is shifted left by its depth (right
+   below the screen), the nearer pixel kept, and gaps filled from the pixel to the
+   right (what lies behind).
+4. Strength: a storey is 96 high; the floor above the player's stands 4 px out at the
+   slider's top, clamped at 8 px. The slider scales it.
+5. With the slider at 0 the depth is detached, `gfxSet3D` is off and no right eye is
+   made: the 2D picture and its cost are as before.
 
-Choices to make when it is built:
+The screen plane is the height the player is drawn at (so it glides with him on stairs),
+or the camera's when he is not in view.
 
-- **Depth from height only, or also from distance.** Height only keeps floors flat at the
-  screen; adding a slight tilt with distance (`x + y`) makes the floor look like a table
-  seen from above. Start with height only, then try the tilt.
-- **Which level sits at the screen:** the player's own, so the action is comfortable to
-  look at.
-- **The status bar and menus** stay flat at the screen.
+Open:
 
-**Prototype without the console:** Lime3DS shows stereo as anaglyph or side by side, so
-the depth buffer and the eye shift can be judged in the emulator first.
+- Measured cost on a classic 3DS (depth writes + right eye), not yet done.
+- Diagonal edges high above the player (wall tops) show small steps in the right eye,
+  as each row's shift is a whole pixel. Judge on the console.
+- A slight tilt with distance (`x + y`), so the floor looks like a table seen from
+  above, is not tried.
+- Lime3DS shows the eyes side by side or as anaglyph (`render_3d`, `factor_3d` in
+  `qt-config.ini`), which is how this was first checked.

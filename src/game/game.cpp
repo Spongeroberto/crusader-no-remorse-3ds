@@ -1939,6 +1939,10 @@ bool Game::render_lit(const Surface8& screen, std::vector<std::uint32_t>& argb) 
 
 // @orig 1188:19C1
 void Game::render(Surface8& screen, RenderStats* stats) {
+    // Port addition: with a depth attached (stereoscopic 3D), all is at the
+    // screen plane but the world drawn by render_view.
+    screen.fill_depth(Surface8::kDepthScreen);
+    screen.set_depth(0);
     // Port: a half-resolution screen (Surface8::half) is drawn into directly
     // in play. Movies, menus, messages and UI screens, some of which use the
     // pixels directly, are drawn at full size and every other pixel kept:
@@ -2040,6 +2044,12 @@ void Game::render_view(Surface8& screen, RenderStats* stats, bool keep_view) {
     // DLIST.C 11A0:05xx: right after item 1, in combat (or holstering,
     // last action 0xB), its weapon (WPNOVLAY.DAT), unmirrored, at the item's
     // screen place plus the offsets of the current action, direction, frame.
+    // Port addition: the player's floor at the screen plane in stereo 3D
+    // (the height he is drawn at, so it glides with him), else the camera's.
+    std::int32_t screen_z = s.camera_z;
+    for (const DrawItem& d : list) {
+        if (d.item->id == 1) screen_z = d.z;
+    }
     draw_display_list(screen, list, &xform_, [this, marks, casings](Surface8& surface, const DrawItem& d) {
         if (marks) damage_marks_.draw(surface, d);
         [&] {
@@ -2059,7 +2069,8 @@ void Game::render_view(Surface8& screen, RenderStats* stats, bool keep_view) {
             shape->frames()[piece->frame].draw(surface, d.sx + piece->dx, d.sy + piece->dy, false);
         }();
         if (casings) casings_.draw(surface, d, damage_marks_);
-    });
+    }, screen_z);
+    screen.set_depth(0);  // what comes over the scene stays at the screen plane
     const double t_drawn = now();
     // Port addition: what the lighting needs of the world just drawn; what
     // comes over it below (aiming sprites, status bar) is shown unlit.

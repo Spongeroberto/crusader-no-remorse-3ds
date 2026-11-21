@@ -23,6 +23,7 @@
 #include <exception>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 // The picture is drawn by the CPU and needs only a few MiB the GPU can read;
 // the rest of the 64 MiB goes to the ordinary heap.
@@ -62,7 +63,7 @@ constexpr PadAction kDetonate = {"DETONATE", 0x30, false, 'b'};
 
 // In play. The circle pad moves, and runs when pushed far out (see
 // Controls::move and Controls::run). R held aims (Controls::aim); D-pad left /
-// right step aside, or roll on a double tap (Controls::side_tap). Y uses
+// right step aside, or roll when held (Controls::side_button). Y uses
 // (Controls::play_action) and SELECT picks up everything or, held, sets off
 // the detpacs (Controls::select_button). Weapons and items are picked on the
 // touch screen (Controls::touch).
@@ -115,17 +116,14 @@ public:
         for (int c = 0; c < kControlCount; ++c) {
             if (now[c] && !held_[c]) {
                 press(c, menu ? kMenu[c] : play_action(c));
-                if (!menu && (c == kPadLeft || c == kPadRight)) side_tap(c == kPadLeft ? 0 : 1, t);
             }
             if (!now[c] && held_[c]) release(c);
             held_[c] = now[c];
         }
-        select_button(!menu && now[kSelect], t);
-        if (menu) side_ = -1;
-        else if (side_ >= 0 && t >= side_until_) {
-            pulse(action(side_ == 0 ? kPadStepLeft : kPadStepRight));
-            side_ = -1;
-        }
+        if (menu) select_down_ = false;  // a menu drops the press: no G into it
+        else select_button(now[kSelect], t);
+        if (menu) side_ = -1;  // a menu drops the press: no step into it
+        else side_button(now[kPadLeft] ? 0 : now[kPadRight] ? 1 : -1, t);
         aim(!menu && now[kR], pad);
         if (menu) {
             move(-1);  // no move key held under a menu
@@ -186,11 +184,11 @@ public:
 
 private:
     static constexpr int kTries = 30;
-    // How long a D-pad left / right tap waits for a second one: two taps
-    // roll, one steps aside once this has passed. A step cannot go at once
-    // and become a roll on the second tap: the game drops a key pressed
-    // while the player is busy (AvatarMover), so the roll would be lost.
-    static constexpr double kDoubleTapUs = 180'000;
+    // How long D-pad left / right is held to roll instead of stepping aside.
+    // The step goes at the release, not the press: the game drops a key
+    // pressed while the player is busy (AvatarMover), so a step sent at once
+    // would swallow the roll.
+    static constexpr double kRollHoldUs = 200'000;
 
     // How long SELECT is held to set off the detpacs instead of picking up.
     static constexpr double kHoldUs = 400'000;
@@ -217,17 +215,21 @@ private:
         select_down_ = down;
     }
 
-    // A D-pad left (0) or right (1) press at `t`.
-    void side_tap(int side, double t) {
-        if (side_ == side && t < side_until_) {
-            pulse(action(side == 0 ? kPadRollLeft : kPadRollRight));
-            side_ = -1;
+    // D-pad left (0), right (1) or neither (-1) held at `t`: a short press
+    // steps aside at its release; held past kRollHoldUs it rolls, once.
+    // Switching sides ends the press of the first.
+    void side_button(int side, double t) {
+        if (side == side_) {
+            if (side_ >= 0 && !side_rolled_ && t - side_since_ >= kRollHoldUs) {
+                pulse(action(side_ == 0 ? kPadRollLeft : kPadRollRight));
+                side_rolled_ = true;
+            }
             return;
         }
-        // A tap of the other side first lets the pending one step at once.
-        if (side_ >= 0) pulse(action(side_ == 0 ? kPadStepLeft : kPadStepRight));
+        if (side_ >= 0 && !side_rolled_) pulse(action(side_ == 0 ? kPadStepLeft : kPadStepRight));
         side_ = side;
-        side_until_ = t + kDoubleTapUs;
+        side_since_ = t;
+        side_rolled_ = false;
     }
 
     // Pressed now (the modifier first), released at the next update(): the
@@ -366,8 +368,9 @@ private:
     bool select_down_ = false;
     bool select_held_ = false;  // the hold has set off the detpacs
     double select_since_ = 0;
-    int side_ = -1;  // a D-pad left (0) or right (1) tap waiting for a second
-    double side_until_ = 0;
+    int side_ = -1;  // D-pad left (0) or right (1) held
+    double side_since_ = 0;
+    bool side_rolled_ = false;  // the hold has rolled
     const PadAction* pulsed_ = nullptr;
     const PadAction* tapped_ = nullptr;
     InventoryPanel::Hit want_;
@@ -382,7 +385,7 @@ constexpr std::array<const char*, 13> kHelp = {
     "Circle pad  move, far: run",
     "A fire  B jump  X select  Y use",
     "L kneel / stand  R aim (hold)",
-    "D-pad L / R  step, twice: roll",
+    "D-pad L / R  step, hold: roll",
     "D-pad up energy  down medkit",
     "SELECT  pick up all,",
     "  hold: detonate",
@@ -505,6 +508,10 @@ int main() {
         BottomScreen bottom(game);
         std::string stats;
         Surface8 screen = Surface8::half(800, 480);
+        // Stereoscopic 3D, on while the 3D slider is up only, so 2D costs
+        // nothing: the depth of each pixel is written as the scene is drawn,
+        // and the right eye is made from the picture and its depth.
+        std::vector<std::uint8_t> depth, right_eye;
 
         double last = now_us(), fps_since = last;
         int frames = 0;
@@ -520,9 +527,16 @@ int main() {
             game.update(static_cast<std::uint32_t>(frame_us));
             const double t_updated = now_us();
             if (game.quit_requested()) break;
+            const float slider = osGet3DSliderState();
+            if ((slider > 0) != screen.has_depth()) {
+                if (slider > 0) screen.attach_depth(depth);
+                else screen.detach_depth();
+                gfxSet3D(slider > 0);
+            }
             game.render(screen);
             const double t_rendered = now_us();
             ctr::draw_to_top_screen(screen, game.palette());
+            if (slider > 0) ctr::draw_right_eye(screen, game.palette(), slider, right_eye);
             bottom.update(stats);
             gfxFlushBuffers();
             gfxSwapBuffers();

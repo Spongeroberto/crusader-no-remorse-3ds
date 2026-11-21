@@ -44,7 +44,52 @@ struct Surface8 {
         v.half_ = s.half_;
         v.origin_ = s.half_ ? s.row(y / 2) + x / 2 : s.row(y) + x;
         v.stride_ = s.stride();
+        if (s.depth_base_) {
+            v.depth_base_ = s.half_ ? s.depth_row(y / 2) + x / 2 : s.depth_row(y) + x;
+            v.depth_z_ = s.depth_z_;
+            v.depth_height_ = s.depth_height_;
+        }
         return v;
+    }
+
+    // Depth, for stereoscopic 3D: an optional byte per stored pixel, laid out
+    // as the pixels: kDepthScreen at the screen plane, one more per two units
+    // of height above it (depth_byte). While one is attached, ShapeFrame::draw
+    // writes a depth wherever it writes an opaque pixel, from set_depth; the
+    // colours drawn do not change. Other drawing (fills, copies, at()) leaves
+    // the depth as it was. `buffer` must outlive the surface and its windows;
+    // attach it to a surface that owns its pixels, not to a window (windows
+    // made afterwards share it).
+    static constexpr std::uint8_t kDepthScreen = 128;
+    static std::uint8_t depth_byte(int z) {
+        return static_cast<std::uint8_t>(std::clamp(kDepthScreen + (z >> 1), 1, 255));
+    }
+    void attach_depth(std::vector<std::uint8_t>& buffer) {
+        buffer.assign(pixels.size(), kDepthScreen);
+        depth_base_ = buffer.data();
+    }
+    void detach_depth() { depth_base_ = nullptr; }
+    bool has_depth() const { return depth_base_ != nullptr; }
+    // What is drawn next stands at height z (against the screen plane's) and
+    // is `height` tall: an isometric box whose nearest bottom corner is the
+    // frame's anchor. Its pixel (u, v) from the anchor, in pixels of the
+    // picture, is on a front face at height -v - |u| / 2 above the bottom
+    // (sy = x/8 + y/8 - z, sx = x/4 - y/4), at most `height` (the top).
+    // Height 0 is flat: all at z.
+    void set_depth(int z, int height = 0) {
+        depth_z_ = z;
+        depth_height_ = height;
+    }
+    int depth_z() const { return depth_z_; }
+    int depth_height() const { return depth_height_; }
+    // Stored row y of the depth, null when none is attached.
+    std::uint8_t* depth_row(int y) {
+        return depth_base_ ? depth_base_ + static_cast<std::size_t>(y) * stride() : nullptr;
+    }
+    const std::uint8_t* depth_row(int y) const { return const_cast<Surface8*>(this)->depth_row(y); }
+    void fill_depth(std::uint8_t d) {
+        if (!depth_base_) return;
+        for (int y = 0; y < stored_height(); ++y) std::fill_n(depth_row(y), stored_width(), d);
     }
 
     bool half_resolution() const { return half_; }
@@ -79,6 +124,9 @@ private:
     int stride() const { return origin_ ? stride_ : stored_width(); }
     std::uint8_t* origin_ = nullptr;  // a window's top-left pixel in its surface
     int stride_ = 0;
+    std::uint8_t* depth_base_ = nullptr;  // depth of the stored pixel (0, 0)
+    int depth_z_ = 0;
+    int depth_height_ = 0;
     bool half_ = false;
 };
 
