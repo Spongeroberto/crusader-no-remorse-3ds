@@ -54,12 +54,13 @@ const PadAction* action(int id) { return &kPadActions[static_cast<std::size_t>(i
 // AZERTY alike (unlike Y and J).
 constexpr PadAction kYes = {"YES", 0x18, false, 'o'};
 
-// In play. The circle pad moves (see Controls::move). Weapons and items are
+// In play. The circle pad moves, and runs when pushed far out (see
+// Controls::move and Controls::run), so R is free. Weapons and items are
 // picked on the touch screen (Controls::touch), so Y and D-pad left / right
-// are free.
+// are free too.
 const std::array<const PadAction*, kControlCount> kPlay = {
     action(kPadFire), action(kPadJump), action(kPadSelect), nullptr,
-    action(kPadCrouch), action(kPadShift), action(kPadMenu), action(kPadConfirm),
+    action(kPadCrouch), nullptr, action(kPadMenu), action(kPadConfirm),
     action(kPadUseItem), action(kPadMedkit), nullptr, nullptr,
 };
 // In menus and screens: the D-pad (or the circle pad) is the arrows, A is
@@ -103,10 +104,14 @@ public:
         }
         if (menu) {
             move(-1);  // no move key held under a menu
+            run(false);
             arrow(direction(pad, 4, arrow_dir_));
         } else {
             arrow(-1);
-            move(direction(pad, 8, move_dir_));
+            const int dir = direction(pad, 8, move_dir_);
+            // Shift goes down before the move key, so the first step is already a run.
+            run(dir >= 0 && far_out(pad, running_));
+            move(dir);
         }
     }
 
@@ -207,6 +212,22 @@ private:
         return want;
     }
 
+    // Whether the circle pad is pushed far enough to run (it reads about 150
+    // at the rim). As in direction(), a run is kept further in than it starts.
+    static bool far_out(const circlePosition& pad, bool running) {
+        const double len = std::hypot(static_cast<double>(pad.dx), static_cast<double>(pad.dy));
+        return len > (running ? 105.0 : 120.0);
+    }
+
+    // Running is the original's Shift held while moving (AvatarMover); the
+    // key repeat carries the current shift state, so a walk becomes a run (and
+    // back) at the next step without releasing the move key.
+    void run(bool on) {
+        if (on == running_) return;
+        key(kScShift, false, on);
+        running_ = on;
+    }
+
     // In menus the circle pad is one arrow key, pressed once per push.
     void arrow(int dir) {
         if (dir == arrow_dir_) return;
@@ -234,6 +255,7 @@ private:
     std::uint16_t flags_ = 0;
     int move_dir_ = -1;
     int arrow_dir_ = -1;
+    bool running_ = false;
     const PadAction* tapped_ = nullptr;
     InventoryPanel::Hit want_;
     int tries_ = 0;
@@ -243,10 +265,10 @@ private:
 // dark background).
 constexpr std::array<const char*, 13> kHelp = {
     "Crusader: No Remorse (3DS port)",
-    "Circle pad   move",
+    "Circle pad   move, push far to run",
     "A  fire           B  jump",
     "X  select object",
-    "L  kneel          R  run (hold)",
+    "L  kneel",
     "D-pad up  use item   down  medkit",
     "SELECT  use selected   START  menu",
     "Touch the equipment to pick a",
