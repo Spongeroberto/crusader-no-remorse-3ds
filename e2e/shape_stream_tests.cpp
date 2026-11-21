@@ -68,6 +68,10 @@ std::optional<FixedRecord> landing(const std::filesystem::path& data, int map) {
 
 void run(const std::filesystem::path& data) {
     Pair p(data);
+    // The loading notice (set_loading_notice): only where shapes are read per map.
+    int notices = 0, whole_notices = 0;
+    p.streamed.set_loading_notice([&] { ++notices; });
+    p.whole.set_loading_notice([&] { ++whole_notices; });
     p.both([](Game& g) { g.new_game(0); });
 
     // To play, as the bench does: Escape, held for one frame, skips the movies.
@@ -82,6 +86,8 @@ void run(const std::filesystem::path& data) {
     const int first_map = p.whole.world().current_map();
     check(first_map > 0 && p.streamed.world().current_map() == first_map, "both games are on the first map");
 
+    const int notices_first = notices;
+    check(notices_first >= 1, "the first map's loading is noticed");
     p.both([](Game& g) { g.key(0x48, true, true, 0); });  // walk
     for (int i = 0; i < 300; ++i) p.step("first map");
     const auto first = p.streamed.shape_stats();
@@ -94,12 +100,18 @@ void run(const std::filesystem::path& data) {
     check(p.streamed.world().current_map() == other_map, "the player is on the other map");
     for (int i = 0; i < 300; ++i) p.step("other map");
     const auto second = p.streamed.shape_stats();
+    // Map 2 shares most of its shapes with map 1 (about 30 to read): too few
+    // to be worth a notice, which is for loads of a second or more.
+    const int notices_second = notices;
+    check(notices_second <= notices_first + 1, "a map change is noticed at most once");
 
     const auto back = landing(data, first_map);
     p.both([&](Game& g) { g.world().teleport(1, back->x, back->y, back->z, first_map); });
     check(p.streamed.world().current_map() == first_map, "the player is back on the first map");
     for (int i = 0; i < 300; ++i) p.step("back on the first map");
     const auto third = p.streamed.shape_stats();
+    check(notices == notices_second + 1, "the way back (over 200 shapes to read) is noticed");
+    check(whole_notices == 0, "no notice when SHAPES.FLX is held whole");
 
     std::printf("frames %d, compared %d, differing %d; maps %d -> %d -> %d\n", p.frame, p.compared, p.differing,
                 first_map, other_map, p.streamed.world().current_map());

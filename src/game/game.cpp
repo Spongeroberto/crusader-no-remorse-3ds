@@ -776,6 +776,7 @@ void Game::prepare_shapes(int map) {
     std::sort(wanted.begin(), wanted.end());
     wanted.erase(std::unique(wanted.begin(), wanted.end()), wanted.end());
     shapes_.keep_only(wanted);
+    if (loading_notice_ && shapes_.missing(wanted) >= kLoadingNoticeShapes) loading_notice_();
     shapes_.load(wanted);
 }
 

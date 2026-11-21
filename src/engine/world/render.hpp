@@ -64,6 +64,8 @@ public:
     // and drops every shape not in `shapes`.
     void load(std::span<const std::uint16_t> shapes);
     void keep_only(std::span<const std::uint16_t> shapes);
+    // How many of `shapes` load() would read (from a FlexFile; 0 otherwise).
+    std::size_t missing(std::span<const std::uint16_t> shapes) const;
 
     // A bound on how far any shape's frames reach from their anchor
     // (ShapeReach), or null when there is none. From an archive it is

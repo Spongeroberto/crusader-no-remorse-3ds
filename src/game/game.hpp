@@ -90,6 +90,12 @@ public:
 
     // The world's shapes: how many are held and how they were read.
     ShapeCache::Stats shape_stats() const { return shapes_.stats(); }
+    // Port only, with stream_shapes: called just before a map's shapes are
+    // read when there are many (kLoadingNoticeShapes or more), so a console
+    // can show that it is loading for the second or two the reads take. The
+    // game shows nothing itself: the reads happen within update().
+    static constexpr std::size_t kLoadingNoticeShapes = 32;
+    void set_loading_notice(std::function<void()> shown) { loading_notice_ = std::move(shown); }
 
     // Port only, for measuring on slow hardware: time spent in the main
     // phases of update and render, in microseconds, summed over every frame
@@ -481,6 +487,7 @@ private:
 
     // Rebuilt by each load, in this order (the machine refers to the kernel,
     // the intrinsics to the world).
+    std::function<void()> loading_notice_;  // set_loading_notice
     std::unique_ptr<Kernel> kernel_;
     std::unique_ptr<UCMachine> machine_;
     std::unique_ptr<World> world_;
