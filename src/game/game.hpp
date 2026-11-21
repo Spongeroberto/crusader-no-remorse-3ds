@@ -218,6 +218,9 @@ public:
     // The controlled NPC's facing as a screen direction (degrees,
     // counter-clockwise from east), for set_aim_stick to aim straight ahead.
     double facing_screen_deg() const;
+    // The item selection mode of the game view is on (item_selection.hpp):
+    // there Enter uses or picks up the selected item, which U does not.
+    bool selecting() const { return world_ && world_->state.selection.active; }
     // Ends the aiming mode as a non-aiming action does (aim_after_do_anim):
     // the crosshair goes and the fire state is reset. For a hold-to-aim
     // button; the original has no key for it.

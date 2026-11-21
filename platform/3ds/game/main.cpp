@@ -54,14 +54,22 @@ const PadAction* action(int id) { return &kPadActions[static_cast<std::size_t>(i
 // AZERTY alike (unlike Y and J).
 constexpr PadAction kYes = {"YES", 0x18, false, 'o'};
 
+// Original keys with no PadAction (player_commands.hpp): E uses an energy
+// cube, G picks up everything near, B sets off the detpacs.
+constexpr PadAction kEnergyCube = {"ENERGY CUBE", 0x12, false, 'e'};
+constexpr PadAction kPickUpAll = {"PICK UP ALL", 0x22, false, 'g'};
+constexpr PadAction kDetonate = {"DETONATE", 0x30, false, 'b'};
+
 // In play. The circle pad moves, and runs when pushed far out (see
 // Controls::move and Controls::run). R held aims (Controls::aim); D-pad left /
-// right step aside, or roll on a double tap (Controls::side_tap). Weapons
-// and items are picked on the touch screen (Controls::touch), so Y is free.
+// right step aside, or roll on a double tap (Controls::side_tap). Y uses
+// (Controls::play_action) and SELECT picks up everything or, held, sets off
+// the detpacs (Controls::select_button). Weapons and items are picked on the
+// touch screen (Controls::touch).
 const std::array<const PadAction*, kControlCount> kPlay = {
-    action(kPadFire), action(kPadJump), action(kPadSelect), nullptr,
-    action(kPadCrouch), nullptr, action(kPadMenu), action(kPadConfirm),
-    action(kPadUseItem), action(kPadMedkit), nullptr, nullptr,
+    action(kPadFire), action(kPadJump), action(kPadSelect), action(kPadUseItem),
+    action(kPadCrouch), nullptr, action(kPadMenu), nullptr,
+    &kEnergyCube, action(kPadMedkit), nullptr, nullptr,
 };
 // In menus and screens: the D-pad (or the circle pad) is the arrows, A is
 // Enter, B and START are Escape (back, or "no"), X is "yes" and Y is Tab
@@ -106,12 +114,13 @@ public:
         const double t = now_us();
         for (int c = 0; c < kControlCount; ++c) {
             if (now[c] && !held_[c]) {
-                press(c, menu ? kMenu[c] : kPlay[c]);
+                press(c, menu ? kMenu[c] : play_action(c));
                 if (!menu && (c == kPadLeft || c == kPadRight)) side_tap(c == kPadLeft ? 0 : 1, t);
             }
             if (!now[c] && held_[c]) release(c);
             held_[c] = now[c];
         }
+        select_button(!menu && now[kSelect], t);
         if (menu) side_ = -1;
         else if (side_ >= 0 && t >= side_until_) {
             pulse(action(side_ == 0 ? kPadStepLeft : kPadStepRight));
@@ -182,6 +191,31 @@ private:
     // and become a roll on the second tap: the game drops a key pressed
     // while the player is busy (AvatarMover), so the roll would be lost.
     static constexpr double kDoubleTapUs = 180'000;
+
+    // How long SELECT is held to set off the detpacs instead of picking up.
+    static constexpr double kHoldUs = 400'000;
+
+    // Y uses: the active item (U), or in the selection mode the selected
+    // item, which Enter uses or picks up (U would leave an item on the floor).
+    const PadAction* play_action(int control) const {
+        if (control == kY && game_.selecting()) return action(kPadConfirm);
+        return kPlay[control];
+    }
+
+    // SELECT, `down` at `t`: a short press picks up everything at its
+    // release; held past kHoldUs it sets off the detpacs, once.
+    void select_button(bool down, double t) {
+        if (down && !select_down_) {
+            select_since_ = t;
+            select_held_ = false;
+        } else if (down && !select_held_ && t - select_since_ >= kHoldUs) {
+            pulse(&kDetonate);
+            select_held_ = true;
+        } else if (!down && select_down_ && !select_held_) {
+            pulse(&kPickUpAll);
+        }
+        select_down_ = down;
+    }
 
     // A D-pad left (0) or right (1) press at `t`.
     void side_tap(int side, double t) {
@@ -329,6 +363,9 @@ private:
     bool running_ = false;
     bool aiming_ = false;
     double aim_deg_ = 0;
+    bool select_down_ = false;
+    bool select_held_ = false;  // the hold has set off the detpacs
+    double select_since_ = 0;
     int side_ = -1;  // a D-pad left (0) or right (1) tap waiting for a second
     double side_until_ = 0;
     const PadAction* pulsed_ = nullptr;
@@ -339,23 +376,24 @@ private:
 
 // The controls in menus, in the font of the movie subtitles (light, for a
 // dark background).
-constexpr std::array<const char*, 15> kHelp = {
+// At most 14 lines: the 15th would reach the frame times at the bottom.
+constexpr std::array<const char*, 14> kHelp = {
     "Crusader: No Remorse (3DS port)",
-    "Circle pad   move, push far to run",
-    "A  fire           B  jump",
-    "X  select object  L  kneel / stand",
-    "R  aim (hold, circle pad points)",
-    "D-pad left / right  step aside,",
-    "  twice: roll",
-    "D-pad up  use item   down  medkit",
-    "SELECT  use selected   START  menu",
-    "Touch the equipment to pick a",
-    "weapon or item",
+    "Circle pad  move, far: run",
+    "A fire  B jump  X select  Y use",
+    "L kneel / stand  R aim (hold)",
+    "D-pad L / R  step, twice: roll",
+    "D-pad up energy  down medkit",
+    "SELECT  pick up all,",
+    "  hold: detonate",
+    "START  menu",
+    "Touch  pick weapon / item",
     "Menus: D-pad or circle pad,",
     "  A enter, B back / no, X yes,",
     "  Y weapons / ammo (shop)",
     "START + SELECT  quit",
 };
+static_assert(kHelp.size() <= 14);
 constexpr int kHelpFont = 4;
 
 // The bottom screen: the equipment in play, the controls otherwise, and the
