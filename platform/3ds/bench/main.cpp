@@ -65,7 +65,11 @@ int main() {
     // Text on the bottom screen; the top one shows the last frame.
     consoleInit(GFX_BOTTOM, nullptr);
     gfxSetDoubleBuffering(GFX_TOP, false);
-    std::printf("Crusader bench (classic 3DS)\n");
+    // As the game: 804 MHz and the L2 cache on a New 3DS (see game/main.cpp).
+    osSetSpeedupEnable(true);
+    bool new_3ds = false;
+    APT_CheckNew3DS(&new_3ds);
+    std::printf("Crusader bench (%s 3DS)\n", new_3ds ? "New" : "classic");
     std::printf("Heap: %lu KiB, linear free: %lu KiB\n\n", static_cast<unsigned long>(envGetHeapSize() >> 10),
                 static_cast<unsigned long>(linearSpaceFree() >> 10));
 
