@@ -742,7 +742,12 @@ void ActorAnimProcess::on_terminate() {
     }
     if (turning_) {
         if (world_.state.aim.turns != 0) --world_.state.aim.turns;
-        if (placed && owner() == world_.state.controlled_npc) enter_aim_mode(kernel(), world_, anims_);
+        // Port addition (World::hold_to_aim): the stop of a run leaves the
+        // weapon out but the aiming mode to the button.
+        const bool stop_run_held_off = world_.hold_to_aim() && action_ == 0x27;
+        if (placed && owner() == world_.state.controlled_npc && !stop_run_held_off) {
+            enter_aim_mode(kernel(), world_, anims_);
+        }
     }
     // 2D09 / 2DC6: an action flagged so (byte 3 bit 7 of ANIM.DAT) destroys
     // the actor, done or failed.

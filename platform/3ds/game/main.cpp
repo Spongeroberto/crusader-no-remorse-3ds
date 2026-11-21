@@ -567,6 +567,7 @@ int main() {
         game.config().follow_player = true;
         game.config().directional_move = true;
         game.config().draw_on_aim = true;  // R draws the weapon to aim
+        game.set_hold_to_aim(true);        // only R aims: a stopped run does not
         game.set_menu_quit_shown(false);   // HOME closes the game; before the start-up menu
         game.start_up();
         game.set_cursor_drawn(false);  // no pointer: menus are played with keys

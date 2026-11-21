@@ -258,6 +258,9 @@ public:
     // the crosshair goes and the fire state is reset. For a hold-to-aim
     // button; the original has no key for it.
     void leave_aim();
+    // A hold-to-aim button (World::hold_to_aim): a stopped run does not
+    // enter the aiming mode by itself.
+    void set_hold_to_aim(bool on) { hold_to_aim_ = on; }
     // True in play while the controlled NPC has its weapon out. The controller
     // then strafes with the left stick while the right stick aims.
     bool weapon_out() const;
@@ -453,6 +456,7 @@ private:
     AnimDat anims_;
     bool aim_stick_ = false;
     double aim_stick_deg_ = 0;
+    bool hold_to_aim_ = false;
     WeaponOverlay weapon_overlay_;
     DamageMarks damage_marks_;  // port addition (GameConfig::impact_marks)
     Casings casings_;           // port addition (GameConfig::casings)

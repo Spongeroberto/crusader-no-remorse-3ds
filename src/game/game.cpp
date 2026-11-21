@@ -978,6 +978,7 @@ void Game::update(std::uint32_t elapsed_us) {
         world_->set_remains_loot(config_.remains_loot);
         world_->set_fix_original_bugs(config_.fix_original_bugs);
         world_->set_stick_moves(config_.directional_move);
+        world_->set_hold_to_aim(hold_to_aim_);
     }
     // The right stick aims for whichever NPC is controlled (a robot taken over
     // too), with the fire key's conditions (CombatControl::handle_key): not
