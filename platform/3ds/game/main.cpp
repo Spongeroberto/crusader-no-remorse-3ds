@@ -119,7 +119,8 @@ public:
             if (!now[c] && held_[c]) release(c);
             held_[c] = now[c];
         }
-        select_button(!menu && now[kSelect], t);
+        if (menu) select_down_ = false;  // a menu drops the press: no G into it
+        else select_button(now[kSelect], t);
         if (menu) side_ = -1;  // a menu drops the press: no step into it
         else side_button(now[kPadLeft] ? 0 : now[kPadRight] ? 1 : -1, t);
         aim(!menu && now[kR], pad);
