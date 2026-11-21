@@ -39,6 +39,9 @@ branch.
 - A Nintendo 3DS, 2DS or New 3DS with homebrew enabled (Luma3DS).
 - Your own copy of *Crusader: No Remorse*, in one of the versions upstream supports. This
   project contains **no game files** and never will.
+- For sound and music, the console's DSP firmware at `sdmc:/3ds/dspfirm.cdc`. The usual
+  Luma3DS setup already makes it; if not, run the DSP1 homebrew once. Without it the game
+  runs silent and says so on the bottom screen.
 
 ## Reporting bugs
 

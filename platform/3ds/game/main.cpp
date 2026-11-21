@@ -6,11 +6,12 @@
 // question is answered with keys. In play a tap on the equipment picks a
 // weapon or item. Data comes from romfs:/data when the
 // CIA bundles it, else from sdmc:/3ds/crusader/data; saves and settings go to
-// sdmc:/3ds/crusader. No sound yet.
+// sdmc:/3ds/crusader. Sound and music go through the DSP (ctr_audio.hpp).
 
 #include "core/pad_config.hpp"
 #include "engine/input/keyboard.hpp"
 #include "engine/ui/inventory_panel.hpp"
+#include "ctr_audio.hpp"
 #include "game/game.hpp"
 #include "top_screen.hpp"
 
@@ -22,6 +23,7 @@
 #include <cstdio>
 #include <exception>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -379,7 +381,8 @@ private:
 
 // The controls in menus, in the font of the movie subtitles (light, for a
 // dark background).
-// At most 14 lines: the 15th would reach the frame times at the bottom.
+// At most 13 lines, and the notice under them: the 15th would reach the frame
+// times at the bottom.
 constexpr std::array<const char*, 13> kHelp = {
     "Crusader: No Remorse (3DS port)",
     "Circle pad  move, far: run",
@@ -395,7 +398,7 @@ constexpr std::array<const char*, 13> kHelp = {
     "  A enter, B back / no, X yes,",
     "  Y weapons / ammo (shop)",
 };
-static_assert(kHelp.size() <= 14);
+static_assert(kHelp.size() <= 13);
 constexpr int kHelpFont = 4;
 
 // The bottom screen: the equipment in play, the controls otherwise, and the
@@ -407,6 +410,8 @@ public:
           surface_(InventoryPanel::kWidth, InventoryPanel::kHeight) {}
 
     const InventoryPanel::State& state() const { return state_; }
+    // A line under the controls, shown with them.
+    void set_notice(std::string notice) { notice_ = std::move(notice); }
 
     void update(const std::string& stats) {
         const InventoryPanel::State state =
@@ -419,6 +424,7 @@ public:
         panel_.draw(surface_, game_.world(), state_, palette_);
         if (!state_.shown) {
             for (std::size_t i = 0; i < kHelp.size(); ++i) print(6, 6 + 15 * static_cast<int>(i), kHelp[i]);
+            if (!notice_.empty()) print(6, 6 + 15 * static_cast<int>(kHelp.size()), notice_);
         }
         print(4, InventoryPanel::kHeight - 12, stats_);
         ctr::draw_to_bottom_screen(surface_, palette_);
@@ -465,6 +471,7 @@ private:
     InventoryPanel::State state_;
     Palette palette_;
     std::string stats_;
+    std::string notice_;
     bool drawn_ = false;
 };
 
@@ -504,8 +511,15 @@ int main() {
         game.set_cursor_drawn(false);  // no pointer: menus are played with keys
         game.set_status_bar_drawn(false);  // the bottom screen shows it
         game.set_menu_quit_shown(false);   // HOME closes the game
+        // Destroyed before the game: its thread reads the game's mixer.
+        std::unique_ptr<ctr::Audio> audio;
+        if (game.audio()) {
+            audio = std::make_unique<ctr::Audio>(game.audio()->mixer);
+            game.set_audio_device(audio->ok());
+        }
         Controls controls(game);
         BottomScreen bottom(game);
+        if (audio && !audio->dsp_ok()) bottom.set_notice("No sound: run DSP1 once");
         std::string stats;
         Surface8 screen = Surface8::half(800, 480);
         // Stereoscopic 3D, on while the 3D slider is up only, so 2D costs
