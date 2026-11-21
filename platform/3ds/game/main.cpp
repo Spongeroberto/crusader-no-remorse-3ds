@@ -488,6 +488,10 @@ void wait_for_start() {
 
 int main() {
     gfxInitDefault();
+    // New 3DS: 804 MHz and the L2 cache. The CIA asks for both in its
+    // exheader (app.rsf); a .3dsx started from the Homebrew Launcher gets
+    // them only from this call. A classic 3DS ignores it.
+    osSetSpeedupEnable(true);
     gfxSetDoubleBuffering(GFX_BOTTOM, false);
 
     namespace fs = std::filesystem;
