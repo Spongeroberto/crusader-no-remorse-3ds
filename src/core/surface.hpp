@@ -110,6 +110,7 @@ struct Surface8 {
         if ((x | y) & 1) return nullptr;
         return row(y / 2) + x / 2;
     }
+    const std::uint8_t* at(int x, int y) const { return const_cast<Surface8*>(this)->at(x, y); }
 
     void clear(std::uint8_t color) {
         if (!origin_) {

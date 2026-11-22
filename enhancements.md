@@ -26,6 +26,7 @@ The changes fall into four groups:
    - [7b. Impact marks](#7b-impact-marks)
    - [7c. Casings](#7c-casings)
    - [7d. 3D lighting](#7d-3d-lighting)
+   - [7e. Leaking barrels](#7e-leaking-barrels)
 8. [Autosave](#8-autosave)
    - [8b. Language](#8b-language)
 9. [Toggle run](#9-toggle-run)
@@ -98,6 +99,7 @@ The original has nothing like it. This screen gathers every option the port adds
 | IMPACT MARKS / IMPACTS | Shots leave marks on the scenery | `impactmarks` |
 | BLOOD / SANG | Cycles OFF → ON (the wounded bleed on the scenery) → GORE (much more blood) | `bloodmarks`, `goremode` |
 | CASINGS / DOUILLES | Firearms eject casings that stay on the floor (section 7c) | `casings` |
+| LEAKING BARRELS / FUITES DES BARILS | Explosive barrels take more bullets; each pierces them, their fuel makes a pool that catches fire when they blow up and burns whoever stands in it; a barrel left in the fire blows up (section 7e) | `barrelleaks` |
 
 *GAME / JEU*
 
@@ -290,6 +292,7 @@ The right stick puts the crosshair directly in the direction it points.
 - With **PRECISE AIM**, the stick also picks a target on screen (see [4b](#4b-precise-aim)): the crosshair then points at it on the ground.
 - If the avatar does not face the crosshair (16-way direction measured from its centre; that of the target picked by the stick) and is not busy, it turns with its guard animation: `0x2E` kneeling, `4` standing.
 - If target designation is active, the target search runs again after the turn, or at once when the stick picks another target in the same direction.
+- **Turret of a surveillance monitor** (BASEGUN `0x4C8`, or any NPC whose shape has no action 1): the original never puts it in aiming mode (`DS:2864`), so it has no crosshair and shoots straight ahead in one of its 16 directions, or at the target found that way; the arrow keys turn it one direction at a time. The stick turns it at once to the direction nearest where it points on screen (with **PRECISE AIM**, towards the target it picks there, which its shots then take first), with the same guard animation. Without this, a controller only had the 8 directions of the left stick.
 - **Leaving the aiming mode**: releasing the stick does not leave it, as in the original. Walking with the left stick (not aiming) leaves it at once; a **side step** or a **roll** leaves it for the duration of the animation. To put the weapon away, double-click the **right mouse button**; on the controller, the **jump** action (B by default) holsters a drawn weapon first, then jumps.
 
 ---
@@ -480,6 +483,74 @@ The original draws flat sprites under a fixed light. With this option the world 
 - Otherwise on the processor, on all its cores, by 16 x 16 tiles: the same picture, slower. `--cpu-lighting` forces it.
 - Measured with `lightview` (16 lights, shadows, smoke), a frame takes about 3 ms at 640 x 480, 6 ms at 1280 x 720 and 10 ms at 1920 x 1080 with the GPU, against 7, 14 and 26 ms on the processor.
 - The liquids add about 5.5 ms at 1920 x 1080 over two large pools with the GPU, 14 ms on the processor (their steam is marched in half the steps of smoke and lit as at its centre).
+
+## 7e. Leaking barrels
+
+**Option:** LEAKING BARRELS / FUITES DES BARILS (`barrelleaks`), EFFECTS page, off by default.
+**Files:** `src/engine/world/barrel_leaks.*`, `src/engine/world/projectile.cpp` (the barrels' damage), `src/engine/world/item_damage.cpp` (a barrel blowing up), `src/engine/world/lighting.*` (the fire's smoke and glow), `src/game/game.cpp`
+
+The explosive barrels (BARRELUP 0xAA upright, BARRELS to BARRELSE 0x151..0x155 lying) take several bullets before they blow up: their class adds up the damage of each hit and explodes at 100 (150 in *No Regret*). In the original the bullets before the last leave no trace. With this option each of them pierces the barrel, and its fuel runs out.
+
+**Tougher barrels**
+- A bullet does a barrel 3/5 of its damage (at least 1), after the game's own changes (difficulty, a third for bullets on the lifeless): it takes about 1.7 times as many bullets to blow one up, and so leaks more. Blasts do their full damage, so barrels still blow each other up.
+
+**Holes**
+- Only bullets pierce: the fire types that leave a bullet hole (section 7b) or eject a casing (section 7c). Eight holes at most per barrel.
+- The hole is where the bullet hit: on the round side of an upright barrel, on the face hit of a lying one. A hole in the top lets nothing out.
+- A barrel starts 90 % full. A hole below the fuel's level leaks 1/10 s after the hit; the bullet that blows the barrel up leaks nothing.
+
+**Leak**
+- The fuel's speed out of a hole grows with the square root of the fuel's height above it (Torricelli): a jet out of the side, which falls to the floor, then, as the level drops, a weaker one, at last drops running down the side. It stops once the level is down to the hole. Every hole lowers the level.
+- A jet is a thin brown stream with light flecks running along it, two pixels wide near a strong hole, with a little splash where it lands. Under each hole the side stays wet down to the floor. A hole on a side the camera does not see leaks without its jet being drawn.
+
+**Pool**
+- The fuel makes one pool per barrel: a patch where each jet first landed, one at the foot of the barrel under the hole, and three fingers running on from where the jet landed, mostly the way it flowed; all grow with what ran out of that hole and flow together. A barrel emptied by a low hole makes a pool up to about nine times its width.
+- Its edge is no circle: pushed in and out by broad noise (up to 26 units, less for a small pool), then ragged on a finer scale.
+- It lies on the floor under the barrel (the highest floor at most 16 below it) and on the floors at that level around, as far as it runs from where it started: not down a ledge, not under what stands on the floor (walls, crates), nor past a wall onto the floor on its other side (a drop splashing against a wall does not streak through it).
+- Dark brown, a little see-through at its edge, with a slow sheen.
+
+**Trail**
+- The rolling barrels (ROLLB_NS 0x586, ROLLB_EW 0x58B: lying barrels that a shot sets rolling, 8 units a tick, until they meet something and blow up, by their own class) leak too: a bullet pierces them as it does the others (their damage stays the game's own).
+- A leaking barrel that moves leaves its pool where it was: a rolling barrel, or a barrel thrown by a blast (20 to 50 units a step, a quarter as far at each step after, so 30 to 70 units in all). On its way each hole that leaks drops the fuel every 6 units: an upright barrel slides, and only its holes below the level leak, at the foot of the side under them; a lying barrel rolls every hole under the fuel, and they all leak under it, where the hole lies along its length.
+- The trail is uneven: it wanders from side to side (up to 14 units, over some 120: the barrel wobbles), its drops are wider or narrower (some 10 to 20 units wide, the wider the stronger the leak), and a lying barrel brings each hole round under itself about once a turn: a splash there, a broken dribble while the hole is up.
+- The trail goes on in the pool it starts from, then, past 64 drops, in new pools that touch one another; it lies on the floors at that level (none while the barrel falls), and a barrel that ends up at another level starts a new pool there. Once the barrel has been still for 16 ticks, its jets make a pool where it lies. While a lying barrel rolls, its holes and jets are not drawn (they turn round with it).
+- When the barrel blows up, its pool catches fire where it stood, and the fire runs back along the trail (2.5 units a tick) to where it started, from one pool to the next (a burning pool lights a pool it touches once its fire has come where they touch); pools of its trail at other levels catch at once, from their end nearest the barrel. A trail burns lower than a pool (its flames down to 45 % of the height, the more of the pool is trail).
+
+**Reflections**
+- The pool mirrors what stands behind it: walls, doors, crates, people, the barrel itself, the fire. In this view a mirror in the floor shows, above each of its pixels, the scene mirrored about the line where the floor behind it ends; so each pool pixel takes the pixel as far above that line as it is below it.
+- Darkened and browned (more for what is far behind, over 45 pixels), and a little wavy. The rim and the sheen do not mirror; a burning or burnt pool does not.
+- It is done on the finished picture, column by column, from what was drawn: a pool mirrors what is on screen up to 120 pixels above it.
+
+**Explosion**
+- Every barrel that blows up, shot or not (its last bullet, a blast, another barrel going off), throws what was left in it. Most of it (45 %) burns in the blast. A fifth runs out where it stood: a pool of fire, the bigger the fuller the barrel was, with four fingers, that spreads out in 12 ticks, fast then slower, from a quarter of its size (it no longer lies there at its full size at once). The rest (35 %) flies all round in 12 to 32 burning drops, shared out round the barrel (all directions, give or take), 1.2 to 5.6 units a tick, up to 6 units a tick upwards: they land a few metres off (up to some 250 units), each carrying a share of that fuel by its size. Several barrels going off throw as many sprays.
+- A drop flies as a burning blob with a tail along the way it came, drawn over the scene. Where it meets:
+  - a floor or the top of something: a pool there catches fire; elsewhere what it carries splashes there, burning 2 to 5 seconds: a blot (5 to 34 units, from the fuel it carries as a pool would), drawn out ahead of it along its way the faster it flew (one to three smaller blots), with three droplets round it thrown forwards;
+  - a wall the camera sees: the fuel burns on it 2.5 to 5 seconds, flames rising up the wall, and leaves a sooty stain, black in its middle, of a radius of 13 to 22 units, that stays. It is drawn on whatever shows that point of the wall (a door or a panel drawn over it);
+  - someone: they catch fire (see below), for two seconds.
+- A drop that meets nothing for 2.5 seconds goes out.
+
+**Fire**
+- A blast within reach of a pool, an energy shot (laser, plasma, fire...) that ends on it, a burning drop or a burning pool that touches it sets a pool alight too.
+- The fire spreads from where it caught at about 2.5 units a tick, unevenly: faster one way than another (from 0.75 to 1.25 times as far). It is drawn pixel by pixel: every point of the floor it has reached burns, more strongly where the pool is deep, and flames rise off it up to 64 pixels, losing heat as they go up. Noise rising faster than the flames, in streaks taller than wide and swaying a little, breaks them into tongues that lick up and part from the fire. The hotter a pixel, the whiter: white, yellow, orange, deep orange, then red, a see-through dark red and a wisp of smoke at the tips. The flames rise from the near parts of the pool over the far ones; where two meet, the hotter shows. The pool under the fire glows a dark orange.
+- The pool burns by patches of 32 x 32 units, each drawn in the game's order as a box of its own (the box of its fuel, kept out of what stands on the floor), so what stands in front of the fire covers it and the fire covers what is behind: a fire just behind a wall the camera sees, drawn black, stays hidden by it.
+- It burns 4 to 15 seconds (longer the bigger the pool), dies down for its last 40 %, from the edge in, and leaves a burnt stain that stays.
+- With the 3D lighting (section 7d), the fire gives a flickering orange light, its pixels glow as they are, and, with the volumetric smoke, a dark smoke rises off it, lit from below at first: a puff every 7 ticks off a barrel's pool, every 21 off a drop's little one, every 39 off a fire on a wall (each puff costs the lighting all the pixels it covers).
+- Cost (`game_tests data --barrel-bench`, lighting on the processor, a barrel's pool burning with five fires on walls): about 4.5 ms more to draw at 640 x 480, 8 ms at 1920 x 1080.
+
+**Burning people**
+- Whoever stands in a burning part of a pool (their feet, or 6 units around them, where it burns at a quarter of its strength or more, up to 16 above the floor) catches fire, the Silencer as much as the others.
+- Someone on fire takes 5 damage of fire type 0xC, the game's own fire, at once then every quarter of a second, changed by the difficulty as any hit. A human it kills burns and runs, as in the game. It goes on for a second after they leave the fire.
+- They are drawn in flames: patches of fire over their body, rising off it, weaker once out of the fire; with the 3D lighting they carry an orange light.
+- Only pools, people and fuel barrels catch from a fire: the rest of the scenery does not burn.
+
+**Barrels in the fire**
+- A fuel barrel (BARRELUP, BARRELS to BARRELSE; not the rolling ones) standing in a burning part of a pool (the floor at its sides or corners, a few units out, where it burns at a quarter of its strength or more, up to 16 above the floor) heats up: whole or pierced, whether the pool is its own or not.
+- After 3 to 5 seconds in the fire (180 to 300 ticks, its own number), it blows up: the game deals it 250 damage of fire type 0xC, enough for its class to explode, which then throws its fuel as any barrel blowing up (above) and may light, or blow up, the barrels around it. Out of the fire, it cools off at half the pace it heated up.
+- From a third of the way there, flames climb its sides, higher and stronger as it nears blowing up; with the 3D lighting it glows orange.
+
+**Rules**
+- Leaks use their own numbers, never the game's random generators. Only the barrels' damage, the burns and the barrels blowing up in a fire change the game.
+- They follow the game's clock (they stop with it) and are not saved: a load or a map change forgets them, and so does switching the option off. At most 32 barrels, 96 pools, 160 drops in flight and 96 fires on walls are followed; past that the oldest go.
 
 ---
 

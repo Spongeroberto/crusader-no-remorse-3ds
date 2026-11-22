@@ -267,7 +267,7 @@ const Smoulder kSmoulders[] = {
     {0x25B, 0x60}, {0x25C, 0x60}, {0x25D, 0x02}, {0x25E, 0x02},
     {0x26A, 0x02}, {0x26B, 0x02},  // racks
     {0x3BF, 0xF0}, {0x3C0, 0xF0},  // cabinets
-    {0x431, 0xFFFF00},             // server cabinets (8..23)
+    // Not 0x431: lockers, nothing electric in them (broken: 8..23).
     {0x409, 0xF0},                 // arcade cabinets
     {0x2ED, 0x02}, {0x2EE, 0x02},  // computer cabinets
     {0x37B, 0x02}, {0x37C, 0x02}, {0x380, 0x02}, {0x381, 0x02},  // consoles
@@ -901,10 +901,27 @@ void WorldLighting::add_puff(const Vec3& at, SmokePuff::Kind kind, float scale, 
             p.life = 1.0f;
             p.feature = 16;
             break;
+        case SmokePuff::kFire:
+            // Rising fast off the flames, widening, dark.
+            p.pos = at + Vec3{jx * 6, jy * 6, 0} * scale;
+            p.drift = {jx * 8, jy * 8, 0};
+            p.rise = 70 + rnd(50) * 30;
+            p.radius0 = 14 * scale;
+            p.radius1 = (60 + rnd(60) * 30) * scale;
+            p.density = 0.022f;
+            p.life = 2.4f + rnd(80) * 1.2f;
+            p.feature = 22;
+            break;
         }
         if (puffs_.size() >= kMaxPuffs) puffs_.erase(puffs_.begin());
         puffs_.push_back(p);
     }
+}
+
+// @orig none: port lighting (barrel leaks)
+void WorldLighting::glow(const std::vector<std::pair<std::uint32_t, std::uint8_t>>& pixels) {
+    for (const auto& [j, colour] : pixels)
+        if (j < emissive_.size() && j < world_.size() && world_[j] == colour) emissive_[j] = 1;
 }
 
 // The liquids around the view (steam and light from just off screen too).
@@ -1205,8 +1222,10 @@ void WorldLighting::puff_states(std::vector<PuffState>& out) const {
         // Fades in (at once for a muzzle wisp), thins out to nothing.
         const float fade_in = p.kind == SmokePuff::kMuzzle ? 0.02f : 0.1f;
         s.density = p.density * std::min(1.0f, age / fade_in) * std::pow(1 - u, 1.5f);
-        s.heat = p.kind == SmokePuff::kExplosion ? std::max(0.0f, 1 - age / 0.9f) : 0.0f;
-        s.grey = p.kind == SmokePuff::kExplosion ? 0.3f
+        s.heat = p.kind == SmokePuff::kExplosion ? std::max(0.0f, 1 - age / 0.9f)
+                 : p.kind == SmokePuff::kFire    ? std::max(0.0f, 0.7f - age / 0.4f)
+                                                 : 0.0f;
+        s.grey = p.kind == SmokePuff::kExplosion || p.kind == SmokePuff::kFire ? 0.3f
                  : p.kind == SmokePuff::kImpact  ? 0.55f
                                                  : 0.75f;
         s.seed = p.seed;
@@ -1567,10 +1586,13 @@ Vec3 WorldLighting::smoke_over(Vec3 colour, int px, int py, bool clip, float sur
         const float s1 = mid + half;
         if (clip) s0 = std::max(s0, surface_s);
         if (s1 <= s0) continue;
+        // Only the lights that reach the puff can light a point of it.
+        const std::vector<std::uint32_t>& near = puff_lights_[id];
         auto light_at = [&](const Vec3& p) {
-            const float a = opt.ambient * liquid_dim(lights_, nullptr, p);
+            const float a = opt.ambient * liquid_dim(lights_, &near, p);
             Vec3 light{a, a * 1.02f, a * 1.12f};
-            for (const PointLight& L : lights_) {
+            for (std::uint32_t l : near) {
+                const PointLight& L = lights_[l];
                 const Vec3 to = L.pos - p;
                 const float d2 = dot(to, to);
                 if (d2 >= L.radius * L.radius) continue;
@@ -1646,9 +1668,17 @@ void WorldLighting::shade_cpu(const Surface8& screen, const LightingOptions& opt
         float x, y, r;
     };
     std::vector<Disc> discs;
-    for (const PuffState& p : puff_now_) {
+    puff_lights_.resize(puff_now_.size());
+    for (std::size_t i = 0; i < puff_now_.size(); ++i) {
+        const PuffState& p = puff_now_[i];
         const float x = p.centre.x, y = p.centre.y, z = p.centre.z / kLightZScale;
         discs.push_back({(x - y) * 0.25f, (x + y) * 0.125f - z, p.radius * kPixelScale});
+        puff_lights_[i].clear();
+        for (std::uint32_t l = 0; l < lights_.size(); ++l) {
+            const Vec3 to = lights_[l].pos - p.centre;
+            const float reach = lights_[l].radius + p.radius;
+            if (dot(to, to) < reach * reach) puff_lights_[i].push_back(l);
+        }
     }
     // The lamps' halos, by light (radius 0: none); exp(-9) at 3 halo radii.
     std::vector<Disc> halo_discs;

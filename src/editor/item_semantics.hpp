@@ -8,7 +8,9 @@
 #include "editor/level.hpp"
 
 #include <cstdint>
+#include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace crusader::editor {
@@ -76,6 +78,43 @@ MonsterEgg read_monster_egg(const LevelItem& egg);
 void write_monster_egg(LevelItem& egg, const MonsterEgg& m);
 // A new monster egg with its template.
 LevelItem make_monster_egg(std::int32_t x, std::int32_t y, std::int32_t z, int npc_type);
+
+// MONSTER objects (shape 0x4D0, class MONSTER; most NPCs of the original
+// maps): pairs linked by their quality low, like a monster egg and its
+// template. A frame 0 one, the NPC's place, makes the NPC where it stands
+// (ITEM fn 0x2D: Actor::I_createActorCru(place, kind)), of the kind a frame 1 one of the
+// same quality low within 64 units around it gives; both links are then
+// cleared. The place acts when its area is entered if its map number has
+// bit 3 (event enterFastArea, which clears the bit), else when a script sends
+// it equip (reinforcements, NPCs coming out of doors; No Regret adds its
+// MHATCHER egg). The NPC's parameters are split between the two (create_actor).
+constexpr std::uint16_t kShapeMonster = 0x4D0;
+constexpr std::int32_t kMonsterRange = 64;  // area search around the place
+struct MonsterPair {
+    int npc_type = 0;             // kind NPC number (DTABLE.FLX record)
+    int direction = 0;            // place NPC number low nibble: direction / 2
+    int record_12 = 0;            // place NPC number high nibble
+    int min_difficulty = 1;       // place map number bits 0-1, + 1
+    bool other_weapon = false;    // place map number bit 2
+    bool on_enter = true;         // place map number bit 3
+    int activity[3] = {0, 0, 0};  // kind quality high, place quality high, kind map number
+};
+MonsterPair read_monster_pair(const LevelItem& place, const LevelItem& kind);
+void write_monster_pair(LevelItem& place, LevelItem& kind, const MonsterPair& m);
+// A new pair at one place (the place first), linked by `link`.
+std::pair<LevelItem, LevelItem> make_monster_pair(std::int32_t x, std::int32_t y, std::int32_t z, int npc_type,
+                                                  std::uint8_t link);
+
+// Objects that act through the TRIGGER library (switches, panels, pressure
+// plates, cameras, key cards...): their map number (bits 5-7) and NPC number
+// name the shape of the objects they act on, among those of their quality low
+// (TRIGGER event 0x20: (map number & 0xE0) * 8 + NPC number). The other bits
+// of the map number are flags of their own.
+std::uint16_t trigger_target(const LevelItem& item);
+void set_trigger_target(LevelItem& item, std::uint16_t shape);
+// The bytecode calls or spawns a function of class `cid` (opcode 0x11 call
+// cid fn, 0x57 spawn argsize thissize cid fn), by a scan of its bytes.
+bool code_calls_class(std::span<const std::uint8_t> code, std::uint16_t cid);
 
 // Markers 0x476: the object a chest gives, or an object a TRIGGER switched
 // off (docs/usecode.md): shape = map number + (NPC number & 0xE0) * 8,

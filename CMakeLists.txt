@@ -94,6 +94,7 @@ add_library(crusader_engine
   src/engine/world/projectile.cpp
   src/engine/world/damage_marks.cpp
   src/engine/world/casings.cpp
+  src/engine/world/barrel_leaks.cpp
   src/engine/world/lighting.cpp
   src/engine/world/death_loot.cpp
   src/engine/world/attack.cpp
@@ -215,6 +216,7 @@ target_link_libraries(shape_reach PRIVATE crusader_core)
 add_library(crusader_editor_core
   src/editor/level.cpp
   src/editor/item_semantics.cpp
+  src/editor/level_tools.cpp
   src/editor/project.cpp)
 target_link_libraries(crusader_editor_core PUBLIC crusader_core)
 
@@ -321,7 +323,7 @@ add_executable(audio_data_tests e2e/audio_data_tests.cpp)
 target_link_libraries(audio_data_tests PRIVATE crusader_engine)
 
 add_executable(editor_data_tests e2e/editor_data_tests.cpp)
-target_link_libraries(editor_data_tests PRIVATE crusader_editor_core)
+target_link_libraries(editor_data_tests PRIVATE crusader_editor_core crusader_engine)
 
 add_executable(shape_draw_tests e2e/shape_draw_tests.cpp)
 target_link_libraries(shape_draw_tests PRIVATE crusader_core)

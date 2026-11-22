@@ -5,6 +5,7 @@
 #include "core/language.hpp"
 #include "core/dtable.hpp"
 #include "core/movie_subtitles.hpp"
+#include "core/png_writer.hpp"
 #include "engine/palette_fader.hpp"
 #include "engine/ui/computer_gump.hpp"
 #include "engine/ui/keypad_gump.hpp"
@@ -34,6 +35,7 @@
 #include "test_saves.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -3630,7 +3632,7 @@ void test_aim_mode(const std::filesystem::path& data) {
     auto run = [&](int frames) {
         for (int i = 0; i < frames; ++i) game.update(kFrameUs);
     };
-    run(5);
+    run(10);
     World& w = game.world();
     const GameState::Aim& aim = w.state.aim;
     const Item* player = w.get(1);
@@ -4017,6 +4019,39 @@ void test_weapon_out_movement(const std::filesystem::path& data) {
     CHECK(game.machine().faults().empty());
 }
 
+// The save of the bug "left stick up, right stick down": the player aims
+// (action 4, in combat) with the stance bit 0x02 clear, which only an NPC's
+// AttackProcess sets. Game::weapon_out() read that bit, so the controller
+// sent the keypad's Up (walk north) instead of the strafe while the stick
+// aimed south: he turned north and back every few frames without moving.
+// The weapon is out, and the backward strafe (Alt + Down) moves him north
+// facing the aim.
+void test_weapon_out_with_stance_bit_clear(const std::filesystem::path& data) {
+    Game game(data, test_saves(data));
+    game.load_save_file(test_saves(data) / "pad-recul-en-visant-vers-le-bas.sav");
+    for (int i = 0; i < 10; ++i) game.update(kFrameUs);
+    World& w = game.world();
+    CHECK(!weapon_drawn(w, 1) && in_combat(w, 1));
+    CHECK(game.weapon_out());
+    const std::int32_t y0 = w.get(1)->y;
+    game.key(kScAlt, false, true, 0);
+    game.key(0x50, true, true, kLeftAlt | kAlt);
+    int turned = 0;
+    for (int i = 0; i < 60; ++i) {
+        game.set_aim_stick(true, -90);
+        game.update(kFrameUs);
+        turned += (w.npc_direction(1) & 0xF) != 6;
+    }
+    game.key(0x50, true, false, kLeftAlt | kAlt);
+    game.key(kScAlt, false, false, 0);
+    std::printf("backward while aiming south: last action 0x%X, moved y %d, frames turned away %d\n", last_action(game),
+                w.get(1)->y - y0, turned);
+    CHECK(last_action(game) == 2 || last_action(game) == 0x2D);
+    CHECK(w.get(1)->y < y0 - 32);
+    CHECK(turned == 0);
+    CHECK(game.machine().faults().empty());
+}
+
 // ActorAnim_init (1158:016F): the controlled NPC is in combat while it plays
 // a combat action, which shows its weapon (WPNOVLAY.DAT).
 void test_player_combat_flag(const std::filesystem::path& data) {
@@ -4109,7 +4144,7 @@ void test_leave_surface(const std::filesystem::path& data) {
     auto run = [&](int frames) {
         for (int i = 0; i < frames; ++i) game.update(kFrameUs);
     };
-    run(5);
+    run(10);
     const Item& pad = *w.get(3319);
     CHECK(pad.shape == 0x1DB);
     const ShapeInfo* pi = w.shape_info(pad.shape);
@@ -4687,6 +4722,778 @@ void test_wall_lasers(const std::filesystem::path& data) {
     CHECK(game.machine().faults().empty() && game.machine().unbound_intrinsic_calls().empty());
 }
 
+// Port addition (barrel_leaks.hpp): the explosive barrel 5070 of
+// SAVEGAME.3 (BARRELUP 0xAA) blows up at 100 damage; with the option a
+// bullet does it 3/5 of its damage. Each bullet before the last pierces it
+// (the shot lands on it: WorldHooks::shot_landed) and its fuel runs out into
+// a pool; when it blows up it throws burning drops and its pool catches
+// fire; whoever stands in the fire burns; the pool leaves a burnt stain.
+void test_barrel_leaks(const std::filesystem::path& data) {
+    constexpr ObjId kBarrel = 5070;
+    CHECK(barrel_bullet_damage(0xAA, 30, 2) == 18 && barrel_bullet_damage(0xAA, 30, 4) == 30);
+    Game game(data, test_saves(data));
+    game.config().barrel_leaks = true;
+    game.load_save(3);
+    World& w = game.world();
+    w.state.difficulty = 3;
+    const Item* barrel = w.get(kBarrel);
+    CHECK(barrel && barrel->shape == 0xAA);
+    if (!barrel) return;
+    const World::Point spot = w.location(*barrel);
+    // The Silencer out of the blast's reach.
+    World::Point away = w.location(*w.get(1));
+    bool far = false;
+    for (int ring = 720; ring <= 1600 && !far; ring += 32) {
+        for (int k = 0; k < 16 && !far; ++k) {
+            const World::Point at{spot.x + kDirectionDx[k] * ring / 2, spot.y + kDirectionDy[k] * ring / 2, spot.z};
+            far = position_free(w, w.get(1)->shape, at, nullptr, 1);
+            if (far) away = at;
+        }
+    }
+    CHECK(far);
+    w.move_item(1, away.x, away.y, away.z);
+    Surface8 screen(Game::kScreenWidth, Game::kScreenHeight);
+    const auto run = [&](int frames) {
+        for (int f = 0; f < frames; ++f) {
+            game.update(kFrameUs);
+            game.render(screen);
+        }
+    };
+    // A bullet (fire type 2, 30 damage) in the barrel's side, from (dx, dy) at height dz.
+    const auto hit = [&](int dx, int dy, int dz) {
+        apply_damage(game.kernel(), w, game.animations(), kBarrel, 1, 0, 30, 2);
+        if (w.hooks().shot_landed) w.hooks().shot_landed(kBarrel, spot.x + dx, spot.y + dy, spot.z + dz, 2);
+    };
+    const BarrelLeaks& leaks = game.barrel_leaks();
+    hit(8, 8, 20);
+    run(90);
+    std::printf("barrel leaks: after a hit, damage byte %u, %zu barrel(s), %zu pool(s)\n",
+                w.get(kBarrel) ? w.get(kBarrel)->npc_number : 0, leaks.barrels().size(), leaks.pools().size());
+    CHECK(w.get(kBarrel) && w.get(kBarrel)->npc_number == 18);
+    CHECK(leaks.barrels().size() == 1 && leaks.pools().size() == 1);
+    if (leaks.barrels().size() != 1 || leaks.pools().size() != 1) return;
+    CHECK(leaks.barrels()[0].holes.size() == 1 && leaks.barrels()[0].level < leaks.barrels()[0].height * 0.9);
+    hit(20, 2, 10);
+    run(300);
+    double extent = 0;
+    for (const BarrelLeaks::Lobe& l : leaks.pools()[0].lobes) extent = std::max(extent, l.r);
+    std::printf("barrel leaks: 2 holes, level %.1f, pool %.1f\n", leaks.barrels()[0].level, extent);
+    CHECK(extent > 20 && !leaks.pools()[0].burning);
+    // 18 a bullet: 6 to blow it up (4 without the option).
+    int hits = 2;
+    for (; hits < 12 && w.get(kBarrel) && w.get(kBarrel)->shape == 0xAA; ++hits) {
+        hit(8, 8, 20);
+        run(10);
+    }
+    CHECK(!w.get(kBarrel) || w.get(kBarrel)->shape != 0xAA);
+    std::size_t most_drops = leaks.drops().size();
+    for (int f = 0; f < 40; ++f) {
+        run(1);
+        most_drops = std::max(most_drops, leaks.drops().size());
+    }
+    std::printf("barrel leaks: blown up after %d bullets, up to %zu drops in flight, %zu pools, %zu fires on walls\n",
+                hits, most_drops, leaks.pools().size(), leaks.wall_fires().size());
+    CHECK(hits >= 6 && most_drops >= 10 && !leaks.pools().empty() && leaks.pools()[0].burning);
+    // The Silencer walks into the fire: he catches fire and burns, and goes
+    // out a second after he left it.
+    // A free place where the pool burns well (not on the barrel's debris).
+    const BarrelLeaks::Pool& pool = leaks.pools()[0];
+    const ShapeInfo* body = w.shape_info(w.get(1)->shape);
+    const int half_x = body ? body->footpad_x * 8 : 0, half_y = body ? body->footpad_y * 8 : 0;
+    World::Point in_fire{};
+    bool burning = false;
+    for (int r = 0; r <= 160 && !burning; r += 8) {
+        for (int k = 0; k < 16 && !burning; ++k) {
+            const World::Point at{spot.x + kDirectionDx[k] * r / 2, spot.y + kDirectionDy[k] * r / 2, w.get(1)->z};
+            burning = leaks.fire_at(pool, at.x - half_x, at.y - half_y, game.kernel().ticks()) > 0.5 &&
+                      position_free(w, w.get(1)->shape, {at.x, at.y, spot.z}, nullptr, 1);
+            if (burning) in_fire = {at.x, at.y, spot.z};
+        }
+    }
+    CHECK(burning);
+    const int hp = w.npc_hp(1);
+    w.move_item(1, in_fire.x, in_fire.y, in_fire.z);
+    run(45);
+    const int burnt_hp = w.npc_hp(1);
+    std::printf("barrel leaks: the Silencer in the fire, %s, hit points %d -> %d\n",
+                leaks.on_fire(1) ? "on fire" : "not on fire", hp, burnt_hp);
+    CHECK(leaks.on_fire(1) && burnt_hp < hp);
+    w.move_item(1, away.x, away.y, away.z);
+    run(BarrelLeaks::kAfterBurn + 5);
+    CHECK(!leaks.on_fire(1));
+    run(900);
+    CHECK(!leaks.pools().empty() && leaks.pools()[0].burnt);
+    CHECK(game.machine().faults().empty() && game.machine().unbound_intrinsic_calls().empty());
+}
+
+// Port addition (barrel_leaks.hpp): barrel 5070 of SAVEGAME.3, pierced
+// twice, its pool set alight (a blast's reach, the hook only: no damage).
+// The barrel stands in the fire: it heats up and blows up after kCookMin to
+// kCookMin + kCookMore ticks in it. TRAIL_SHOTS=<folder>: pictures of it.
+void test_barrel_cook_off(const std::filesystem::path& data) {
+    constexpr ObjId kBarrel = 5070;
+    Game game(data, test_saves(data));
+    game.config().barrel_leaks = true;
+    game.load_save(3);
+    World& w = game.world();
+    w.state.difficulty = 3;
+    const Item* barrel = w.get(kBarrel);
+    CHECK(barrel && barrel->shape == 0xAA);
+    if (!barrel) return;
+    const ShapeInfo* info = w.shape_info(barrel->shape);
+    CHECK(info != nullptr);
+    if (!info) return;
+    // Out on the open floor a little way off the Silencer, in sight.
+    const World::Point me = w.location(*w.get(1));
+    World::Point spot{};
+    bool open = false;
+    for (int ring = 256; ring <= 1024 && !open; ring += 32) {
+        for (int k = 0; k < 16 && !open; ++k) {
+            const World::Point at{me.x + kDirectionDx[k] * ring / 2, me.y + kDirectionDy[k] * ring / 2, me.z};
+            open = position_free(w, barrel->shape, at, nullptr, kBarrel) &&
+                   !position_free(w, barrel->shape, {at.x, at.y, at.z - 1}, nullptr, kBarrel);
+            for (int j = 0; j < 16 && open; j += 2) {
+                for (int d = 32; d <= 128 && open; d += 32) {
+                    const World::Point by{at.x + kDirectionDx[j] * d / 2, at.y + kDirectionDy[j] * d / 2, at.z};
+                    open = position_free(w, barrel->shape, by, nullptr, kBarrel) &&
+                           !position_free(w, barrel->shape, {by.x, by.y, by.z - 1}, nullptr, kBarrel);
+                }
+            }
+            if (open) spot = at;
+        }
+    }
+    CHECK(open);
+    if (!open) return;
+    w.move_item(kBarrel, spot.x, spot.y, spot.z);
+    const double cx = spot.x - info->footpad_x * 8.0, cy = spot.y - info->footpad_y * 8.0;
+    Surface8 screen(Game::kScreenWidth, Game::kScreenHeight);
+    const char* shots = std::getenv("TRAIL_SHOTS");
+    const auto run = [&](int frames) {
+        for (int f = 0; f < frames; ++f) {
+            game.update(kFrameUs);
+            game.render(screen);
+        }
+    };
+    const auto hit = [&](int dx, int dy, int dz) {
+        apply_damage(game.kernel(), w, game.animations(), kBarrel, 1, 0, 30, 2);
+        if (w.hooks().shot_landed) w.hooks().shot_landed(kBarrel, spot.x + dx, spot.y + dy, spot.z + dz, 2);
+    };
+    const BarrelLeaks& leaks = game.barrel_leaks();
+    hit(8, 8, 20);
+    run(90);
+    hit(20, 2, 10);
+    run(300);
+    CHECK(leaks.pools().size() == 1 && leaks.heating().empty());
+    if (leaks.pools().size() != 1) return;
+    // Lit at its lobe farthest from the barrel.
+    const BarrelLeaks::Pool& pool = leaks.pools()[0];
+    const BarrelLeaks::Lobe* lit = nullptr;
+    for (const BarrelLeaks::Lobe& l : pool.lobes)
+        if (l.r > 0 && (!lit || std::hypot(l.x - cx, l.y - cy) > std::hypot(lit->x - cx, lit->y - cy))) lit = &l;
+    CHECK(lit != nullptr);
+    if (!lit) return;
+    w.hooks().shot_landed(0, static_cast<std::int32_t>(lit->x), static_cast<std::int32_t>(lit->y), pool.z, 4);
+    const std::uint32_t lit_at = game.kernel().ticks();
+    CHECK(leaks.pools()[0].burning);
+    std::uint32_t heated = 0, blown = 0;
+    float most = 0;
+    bool shot = false;
+    for (int f = 0; f < 2400 && !blown; ++f) {
+        run(1);
+        const std::uint32_t now = game.kernel().ticks();
+        for (const BarrelLeaks::Heating& h : leaks.heating()) {
+            if (h.id != kBarrel) continue;
+            if (!heated) heated = now;
+            most = std::max(most, h.heat / h.fuse);
+            if (shots && !shot && h.heat > 0.8f * h.fuse) {
+                write_png(std::filesystem::path(shots) / "cook-off-heating.png", screen, game.palette());
+                shot = true;
+            }
+        }
+        const Item* b = w.get(kBarrel);
+        if (!b || b->shape != 0xAA) blown = now;
+    }
+    if (shots) {
+        run(6);
+        write_png(std::filesystem::path(shots) / "cook-off-blast.png", screen, game.palette());
+    }
+    std::printf("barrel cook-off: lit at tick %u, the barrel heating from %u, blown up at %u (%u ticks in the fire, "
+                "%.0f%% of its fuse seen)\n",
+                lit_at, heated, blown, blown && heated ? blown - heated : 0, most * 100);
+    CHECK(heated && blown && blown - heated >= BarrelLeaks::kCookMin &&
+          blown - heated <= BarrelLeaks::kCookMin + BarrelLeaks::kCookMore + 30);
+    CHECK(game.machine().faults().empty() && game.machine().unbound_intrinsic_calls().empty());
+}
+
+// Port addition (barrel_leaks.hpp): barrel 5070 of SAVEGAME.3, whole,
+// blown up at once. Part of its fuel runs out where it stood, in a pool
+// that spreads out over kSpreadTicks (no longer at its full size at once);
+// the rest (kThrown) flies all round and splashes, burning, a few metres
+// away. TRAIL_SHOTS=<folder>: pictures of the blast.
+void test_barrel_splash(const std::filesystem::path& data) {
+    constexpr ObjId kBarrel = 5070;
+    Game game(data, test_saves(data));
+    game.config().barrel_leaks = true;
+    game.load_save(3);
+    World& w = game.world();
+    w.state.difficulty = 3;
+    const Item* barrel = w.get(kBarrel);
+    CHECK(barrel && barrel->shape == 0xAA);
+    if (!barrel) return;
+    const std::uint16_t shape = barrel->shape;
+    const ShapeInfo* info = w.shape_info(shape);
+    CHECK(info != nullptr);
+    if (!info) return;
+    // Out on the open floor a little way off the Silencer, in sight: free
+    // and held up there, free all round it.
+    const World::Point me = w.location(*w.get(1));
+    World::Point spot{};
+    bool open = false;
+    for (int ring = 256; ring <= 1024 && !open; ring += 32) {
+        for (int k = 0; k < 16 && !open; ++k) {
+            const World::Point at{me.x + kDirectionDx[k] * ring / 2, me.y + kDirectionDy[k] * ring / 2, me.z};
+            open = position_free(w, shape, at, nullptr, kBarrel) &&
+                   !position_free(w, shape, {at.x, at.y, at.z - 1}, nullptr, kBarrel);
+            for (int j = 0; j < 16 && open; j += 2) {
+                for (int d = 32; d <= 160 && open; d += 32) {
+                    const World::Point by{at.x + kDirectionDx[j] * d / 2, at.y + kDirectionDy[j] * d / 2, at.z};
+                    open = position_free(w, shape, by, nullptr, kBarrel) &&
+                           !position_free(w, shape, {by.x, by.y, by.z - 1}, nullptr, kBarrel);
+                }
+            }
+            if (open) spot = at;
+        }
+    }
+    CHECK(open);
+    if (!open) return;
+    std::printf("barrel splash: the barrel at (%d, %d, %d), %d units off the Silencer\n", spot.x, spot.y, spot.z,
+                static_cast<int>(std::hypot(spot.x - me.x, spot.y - me.y)));
+    w.move_item(kBarrel, spot.x, spot.y, spot.z);
+    const double cx = spot.x - info->footpad_x * 8.0, cy = spot.y - info->footpad_y * 8.0;
+    Surface8 screen(Game::kScreenWidth, Game::kScreenHeight);
+    const char* shots = std::getenv("TRAIL_SHOTS");
+    // On to `ticks` game ticks later.
+    const auto run = [&](std::uint32_t ticks, const char* name = nullptr) {
+        const std::uint32_t until = game.kernel().ticks() + ticks;
+        for (int f = 0; f < 2000 && game.kernel().ticks() < until; ++f) {
+            game.update(kFrameUs);
+            game.render(screen);
+        }
+        if (shots && name) write_png(std::filesystem::path(shots) / name, screen, game.palette());
+    };
+    run(5, "splash-before.png");
+    const BarrelLeaks& leaks = game.barrel_leaks();
+    CHECK(leaks.pools().empty());
+    // A blast (fire type 4): it blows up whole.
+    apply_damage(game.kernel(), w, game.animations(), kBarrel, 1, 0, 250, 4);
+    for (int f = 0; f < 10 && leaks.spreads().empty(); ++f) run(1);
+    CHECK(leaks.spreads().size() == 1);
+    if (leaks.spreads().size() != 1) return;
+    const BarrelLeaks::Spread s = leaks.spreads()[0];
+    const BarrelLeaks::Pool* pool = leaks.pool(s.pool);
+    CHECK(pool && s.lobe < pool->lobes.size());
+    if (!pool || s.lobe >= pool->lobes.size()) return;
+    const double first = pool->lobes[s.lobe].r;
+    // What it held, all of it at once before.
+    const double area = info->footpad_x * 16.0 * info->footpad_y * 16.0 / 3.14159265358979;
+    const double whole = std::min(160.0, 0.6 * std::sqrt(area * info->footpad_z * 8.0 * 0.9 / 0.45));
+    run(4, "splash-0.png");
+    run(BarrelLeaks::kSpreadTicks);
+    pool = leaks.pool(s.pool);
+    CHECK(pool != nullptr);
+    if (!pool) return;
+    const double spread = pool->lobes[s.lobe].r;
+    std::printf("barrel splash: its pool %.1f at first, %.1f spread out (to %.1f; %.1f all at once before)\n", first,
+                spread, s.to, whole);
+    CHECK(first < 0.4 * s.to && leaks.spreads().empty() && std::abs(spread - s.to) < 0.01 && s.to < 0.8 * whole &&
+          pool->burning);
+    // The drops land: splashes all round, burning, a few metres off.
+    run(15, "splash-1.png");
+    run(30, "splash-2.png");
+    int splashes = 0, sectors = 0;
+    double farthest = 0;
+    bool sector[8] = {};
+    for (const BarrelLeaks::Pool& p : leaks.pools()) {
+        if (p.serial == s.pool || p.lobes.empty()) continue;
+        const double dx = p.lobes[0].x - cx, dy = p.lobes[0].y - cy, d = std::hypot(dx, dy);
+        if (d < 24) continue;
+        ++splashes;
+        farthest = std::max(farthest, d);
+        const int k = static_cast<int>(std::floor((std::atan2(dy, dx) + 3.14159265358979) / (2 * 3.14159265358979) * 8)) & 7;
+        if (!sector[k]) ++sectors;
+        sector[k] = true;
+    }
+    std::printf("barrel splash: %d splashes in %d of 8 directions, the farthest %.0f units off, %zu wall fires\n",
+                splashes, sectors, farthest, leaks.wall_fires().size());
+    CHECK(splashes >= 8 && sectors >= 5 && farthest > 60);
+    run(90, "splash-3.png");
+    run(400, "splash-4.png");
+    CHECK(game.machine().faults().empty() && game.machine().unbound_intrinsic_calls().empty());
+}
+
+// Port addition (barrel_leaks.hpp): barrel 5070 of SAVEGAME.3 (baril2)
+// blown up on the floor of its room just behind the room's east wall
+// (7939, 7940, shape 9, x 30703..30719, the side the camera sees drawn
+// black): its fire and the drops' burning behind the wall are hidden by it
+// (a patch of fire 32 units a side poked into the wall and came in front of
+// it, its flames up the black wall), and no fuel runs on past the wall (a
+// pool's field went under it, a drop splashing against it streaked through
+// it, and burnt on the far side). TRAIL_SHOTS=<folder>: a picture of the
+// worst frame, if any fire shows on the wall.
+void test_fire_behind_wall(const std::filesystem::path& data) {
+    constexpr ObjId kBarrel = 5070;
+    constexpr std::int32_t kWallX = 30703;  // the wall's x_left
+    Game game(data, test_saves(data));
+    game.config().barrel_leaks = true;
+    game.load_save(3);
+    World& w = game.world();
+    w.state.difficulty = 3;
+    const Item* barrel = w.get(kBarrel);
+    CHECK(barrel && barrel->shape == 0xAA);
+    if (!barrel) return;
+    const std::uint16_t shape = barrel->shape;
+    const auto is_wall = [&](ObjId id) { return id == 7939 || id == 7940; };
+    for (ObjId id : {7939, 7940}) {
+        const Item* wall = w.get(static_cast<ObjId>(id));
+        CHECK(wall && wall->shape == 9 && wall->x == kWallX + 16);
+        if (!wall) return;
+    }
+    // On the floor as near the wall as it is free (66 units off).
+    World::Point spot{};
+    bool found = false;
+    for (std::int32_t x = kWallX - 2; x >= kWallX - 96 && !found; x -= 2) {
+        for (std::int32_t y = 20000; y <= 20220 && !found; y += 4) {
+            const World::Point at{x, y, 96};
+            found = position_free(w, shape, at, nullptr, kBarrel) &&
+                    !position_free(w, shape, {at.x, at.y, at.z - 1}, nullptr, kBarrel);
+            if (found) spot = at;
+        }
+    }
+    CHECK(found);
+    if (!found) return;
+    w.move_item(kBarrel, spot.x, spot.y, spot.z);
+    Surface8 screen(Game::kScreenWidth, Game::kScreenHeight);
+    const BarrelLeaks& leaks = game.barrel_leaks();
+    const auto frame = [&] {
+        game.update(kFrameUs);
+        game.render(screen);
+    };
+    for (int f = 0; f < 10; ++f) frame();
+    apply_damage(game.kernel(), w, game.animations(), kBarrel, 1, 0, 250, 4);
+    // The fire drawn over the wall, once the drops have landed (those in
+    // flight are drawn over everything) while the pools burn.
+    int over = 0, burning = 0, frames = 0, worst = 0;
+    const char* shots = std::getenv("TRAIL_SHOTS");
+    const std::uint32_t until = game.kernel().ticks() + 240;
+    for (int f = 0; f < 4000 && game.kernel().ticks() < until; ++f) {
+        frame();
+        if (!leaks.drops().empty()) continue;
+        const GameState& gs = w.state;
+        const auto list = build_display_list(w, game.shapes(), View{gs.view_left, gs.view_top}, screen.width,
+                                             screen.height);
+        int here = 0;
+        std::vector<std::uint8_t> seen(static_cast<std::size_t>(screen.width) * screen.height, 0);
+        for (const auto& [index, colour] : leaks.glowing()) {
+            if (seen[index]) continue;  // drawn over by more fire
+            seen[index] = 1;
+            const int x = static_cast<int>(index % static_cast<std::uint32_t>(screen.width));
+            const int y = static_cast<int>(index / static_cast<std::uint32_t>(screen.width));
+            if (screen.row(y)[x] != colour) continue;  // drawn over by what stands in front
+            const auto hits = pick(list, x, y);
+            if (!hits.empty() && is_wall(list[hits.back()].item->id)) ++here;
+        }
+        ++frames;
+        over += here;
+        if (here > worst) {
+            worst = here;
+            if (shots) write_png(std::filesystem::path(shots) / "fire-behind-wall.png", screen, game.palette());
+        }
+        for (const BarrelLeaks::Pool& p : leaks.pools()) burning += p.burning;
+    }
+    // Every pool's fuel behind the wall: none on its other side.
+    int pools = 0, behind = 0;
+    for (const BarrelLeaks::Pool& p : leaks.pools()) {
+        ++pools;
+        bool all = true;
+        for (int j = 0; j < p.grid_h; ++j)
+            for (int i = 0; i < p.grid_w; ++i)
+                if (p.fuel[static_cast<std::size_t>(j) * p.grid_w + i] >= 0)
+                    all = all && p.grid_x + (i + 0.5) * BarrelLeaks::kGrid < kWallX;
+        behind += all;
+    }
+    std::printf("fire behind wall: barrel at (%d, %d, %d), %d pools (%d behind the wall), %d frames, %d fire pixels "
+                "over the wall (%d at most in a frame)\n",
+                spot.x, spot.y, spot.z, pools, behind, frames, over, worst);
+    CHECK(pools > 0 && behind == pools && frames > 100 && burning > 0);
+    CHECK(over == 0);
+    CHECK(game.machine().faults().empty() && game.machine().unbound_intrinsic_calls().empty());
+}
+
+// Leaking barrels: barrel 5070 of SAVEGAME.3, pierced twice, then thrown
+// along the floor (as a blast throws it, Item::I_hurl, gravity 2) lays a
+// trail of fuel in its pool from where it stood to where it stops; it blows
+// up there, and the fire runs back along the trail.
+void test_barrel_trail(const std::filesystem::path& data) {
+    constexpr ObjId kBarrel = 5070;
+    Game game(data, test_saves(data));
+    game.config().barrel_leaks = true;
+    game.load_save(3);
+    World& w = game.world();
+    w.state.difficulty = 3;
+    const Item* barrel = w.get(kBarrel);
+    CHECK(barrel && barrel->shape == 0xAA);
+    if (!barrel) return;
+    const World::Point spot = w.location(*barrel);
+    const std::uint16_t shape = barrel->shape;
+    World::Point away = w.location(*w.get(1));
+    bool far = false;
+    for (int ring = 720; ring <= 1600 && !far; ring += 32) {
+        for (int k = 0; k < 16 && !far; ++k) {
+            const World::Point at{spot.x + kDirectionDx[k] * ring / 2, spot.y + kDirectionDy[k] * ring / 2, spot.z};
+            far = position_free(w, w.get(1)->shape, at, nullptr, 1);
+            if (far) away = at;
+        }
+    }
+    w.move_item(1, away.x, away.y, away.z);
+    // A way along the floor: free and held up all along, away from the
+    // camera (a grenade from the player throws it so), away from its jets.
+    int dir = -1;
+    for (int k : {12, 13, 14, 11, 15, 10, 0, 9, 1}) {
+        if (dir >= 0) break;
+        bool clear = true;
+        for (int d = 8; d <= 128 && clear; d += 8) {
+            const World::Point at{spot.x + kDirectionDx[k] * d / 2, spot.y + kDirectionDy[k] * d / 2, spot.z};
+            clear = position_free(w, shape, at, nullptr, kBarrel) &&
+                    !position_free(w, shape, {at.x, at.y, at.z - 1}, nullptr, kBarrel);
+        }
+        if (clear) dir = k;
+    }
+    CHECK(dir >= 0);
+    if (dir < 0) return;
+    Surface8 screen(Game::kScreenWidth, Game::kScreenHeight);
+    const auto run = [&](int frames) {
+        for (int f = 0; f < frames; ++f) {
+            game.update(kFrameUs);
+            game.render(screen);
+        }
+    };
+    const auto hit = [&](int dx, int dy, int dz) {
+        apply_damage(game.kernel(), w, game.animations(), kBarrel, 1, 0, 30, 2);
+        if (w.hooks().shot_landed) w.hooks().shot_landed(kBarrel, spot.x + dx, spot.y + dy, spot.z + dz, 2);
+    };
+    const BarrelLeaks& leaks = game.barrel_leaks();
+    // Pierced, then a blast throws it as hard as it can (DS:26F8 x 25: 50
+    // units a step), before its pool has spread far: the gravity process
+    // waits 20 ticks before it moves it.
+    hit(8, 8, 20);
+    hit(20, 2, 10);
+    const int step = 50 / std::max(std::abs(kDirectionDx[dir]), std::abs(kDirectionDy[dir]));
+    hurl(game.kernel(), w, kBarrel, kDirectionDx[dir] * step, kDirectionDy[dir] * step, 0, 2);
+    run(10);
+    CHECK(leaks.barrels().size() == 1 && leaks.pool(leaks.barrels()[0].pool));
+    if (leaks.barrels().size() != 1 || !leaks.pool(leaks.barrels()[0].pool)) return;
+    const std::uint32_t serial = leaks.barrels()[0].pool;
+    // Till it comes to rest (its jets then start a pool there, over the
+    // trail's end as it grows).
+    bool rolled_on = false;
+    for (int f = 0; f < 200 && leaks.barrels().size() == 1; ++f) {
+        run(1);
+        if (leaks.barrels()[0].rolling) rolled_on = true;
+        else if (rolled_on) break;
+    }
+    CHECK(rolled_on);
+    const Item* moved = w.get(kBarrel);
+    CHECK(moved && moved->shape == 0xAA);
+    if (!moved || leaks.barrels().size() != 1) return;
+    const BarrelLeaks::Barrel& b = leaks.barrels()[0];
+    const double dx = moved->x - spot.x, dy = moved->y - spot.y;
+    const double rolled = std::sqrt(dx * dx + dy * dy);
+    const BarrelLeaks::Pool* pool = leaks.pool(serial);
+    CHECK(pool != nullptr);
+    if (!pool) return;
+    std::size_t drops = 0;
+    for (const BarrelLeaks::Lobe& l : pool->lobes) drops += l.trail;
+    // The floor at the foot of its first hole, a tenth of the way at a time:
+    // the points wet by the trail only (dry without its drops).
+    BarrelLeaks::Pool dry;
+    dry.seed = pool->seed;
+    for (const BarrelLeaks::Lobe& l : pool->lobes)
+        if (!l.trail) dry.lobes.push_back(l);
+    const BarrelLeaks::Hole& first = b.holes.front();
+    const double foot_x = first.x + first.ux * 3, foot_y = first.y + first.uy * 3;
+    std::vector<std::pair<double, double>> laid;
+    for (int t = 1; t <= 9; ++t) {
+        const double x = spot.x + dx * t / 10 + foot_x, y = spot.y + dy * t / 10 + foot_y;
+        if (BarrelLeaks::field(dry, x, y) < 1 && BarrelLeaks::field_at(*pool, x, y) >= 1) laid.emplace_back(x, y);
+    }
+    std::printf("barrel trail: thrown %.0f units (direction %d), %zu drops in pool %u, %zu of 9 points of its way "
+                "wet by the trail only, %s, same pool %s\n",
+                rolled, dir, drops, serial, laid.size(), b.rolling ? "rolling" : "at rest",
+                b.pool == serial ? "yes" : "no");
+    CHECK(rolled >= 48 && drops >= 5 && laid.size() >= 3 && !b.rolling && b.pool == serial);
+    // At rest, its jets make a pool where it lies.
+    CHECK(pool->lobes.size() > drops + 10);
+    // It blows up where it stopped; the trail burns back to where it stood.
+    for (int hits = 2; hits < 12 && w.get(kBarrel) && w.get(kBarrel)->shape == 0xAA; ++hits) {
+        apply_damage(game.kernel(), w, game.animations(), kBarrel, 1, 0, 30, 2);
+        run(10);
+    }
+    CHECK(!w.get(kBarrel) || w.get(kBarrel)->shape != 0xAA);
+    std::vector<double> hottest(laid.size(), 0.0);
+    for (int f = 0; f < 150; ++f) {
+        run(1);
+        if (const BarrelLeaks::Pool* p = leaks.pool(serial))
+            for (std::size_t k = 0; k < laid.size(); ++k)
+                hottest[k] = std::max(hottest[k], leaks.fire_at(*p, laid[k].first, laid[k].second, game.kernel().ticks()));
+    }
+    std::size_t burnt = 0;
+    std::printf("barrel trail: blown up, the trail burns");
+    for (double h : hottest) {
+        std::printf(" %.2f", h);
+        burnt += h > 0.2;
+    }
+    std::printf("\n");
+    // Up to where it stood (none under its debris, at the far end).
+    CHECK(!laid.empty() && hottest.front() > 0.2 && burnt * 2 >= laid.size());
+    CHECK(game.machine().faults().empty() && game.machine().unbound_intrinsic_calls().empty());
+}
+
+// Leaking barrels: a rolling barrel (ROLLB_NS 0x586, 6960, the one lying by
+// the upright barrel 6959 in save baril-roule-sans-trainee.sav) shot with
+// the Silencer's BA-40 rolls along its way (its class, event 0x21) and,
+// pierced, leaves a trail of fuel behind it; it blows up where it stops and
+// the fire runs back along the trail. TRAIL_SHOTS=<folder>: pictures of the
+// roll and of the fire there.
+void test_rolling_barrel_trail(const std::filesystem::path& data) {
+    constexpr ObjId kBarrel = 6960;
+    Game game(data, test_saves(data));
+    game.config().barrel_leaks = true;
+    game.load_save_file(test_saves(data) / "baril-roule-sans-trainee.sav");
+    World& w = game.world();
+    const Item* barrel = w.get(kBarrel);
+    CHECK(barrel && barrel->shape == 0x586);
+    if (!barrel) return;
+    const World::Point start = w.location(*barrel);
+    const Item* me = w.get(1);
+    w.npc_record(1)[npc::kDirection] = direction_16(me->x, me->y, barrel->x, barrel->y);
+    Surface8 screen(Game::kScreenWidth, Game::kScreenHeight);
+    const char* shots = std::getenv("TRAIL_SHOTS");
+    const auto shot = [&](const char* name) {
+        if (shots) write_png(std::filesystem::path(shots) / name, screen, game.palette());
+    };
+    const auto frame = [&] {
+        game.update(kFrameUs);
+        game.render(screen);
+    };
+    const BarrelLeaks& leaks = game.barrel_leaks();
+    // One shot.
+    game.key(0x39, false, true, 0, ' ');
+    for (int f = 0; f < 20; ++f) frame();
+    game.key(0x39, false, false, 0, 0);
+    // It rolls till it blows up.
+    World::Point last = start;
+    bool rolled = false, pierced = false;
+    int f = 0;
+    for (; f < 900; ++f) {
+        frame();
+        const Item* b = w.get(kBarrel);
+        if (!b || b->shape != 0x586) break;
+        rolled = rolled || b->x != start.x || b->y != start.y;
+        pierced = pierced || (!leaks.barrels().empty() && !leaks.barrels()[0].holes.empty());
+        last = w.location(*b);
+        if (f == 40) shot("rolling-1.png");
+        if (f == 80) shot("rolling-2.png");
+    }
+    shot("rolling-3-end.png");
+    const double dx = last.x - start.x, dy = last.y - start.y;
+    const double way = std::sqrt(dx * dx + dy * dy);
+    // The trail's drops, in whatever pool, along the way it rolled.
+    std::vector<std::pair<double, double>> drops;
+    for (const BarrelLeaks::Pool& p : leaks.pools())
+        for (const BarrelLeaks::Lobe& l : p.lobes)
+            if (l.trail) drops.emplace_back(l.x, l.y);
+    double nearest = 1e9, farthest = 0;
+    for (const auto& [x, y] : drops) {
+        const double along = ((x - start.x) * dx + (y - start.y) * dy) / std::max(way, 1.0);
+        nearest = std::min(nearest, along);
+        farthest = std::max(farthest, along);
+    }
+    std::printf("rolling barrel: rolled %s %.0f units in %d frames, pierced %s, %zu drops from %.0f to %.0f along it, "
+                "%zu pools\n",
+                rolled ? "yes" : "no", way, f, pierced ? "yes" : "no", drops.size(), nearest, farthest,
+                leaks.pools().size());
+    CHECK(rolled && pierced && way > 200 && drops.size() >= 20 && nearest < 0.25 * way && farthest > 0.75 * way);
+    if (drops.empty()) return;
+    // The fire runs back along it: four drops a quarter of the way apart,
+    // from where it stopped.
+    std::vector<std::pair<double, double>> marks;
+    std::sort(drops.begin(), drops.end(), [&](const auto& a, const auto& b) {
+        return (a.first - start.x) * dx + (a.second - start.y) * dy < (b.first - start.x) * dx + (b.second - start.y) * dy;
+    });
+    for (int k = 0; k < 4; ++k) marks.push_back(drops[(drops.size() - 1) * k / 3]);
+    std::vector<double> hottest(marks.size(), 0.0);
+    std::vector<int> first(marks.size(), -1);
+    for (int g = 0; g < 900; ++g) {
+        frame();
+        if (g == 60) shot("rolling-4-burning.png");
+        if (g == 240) shot("rolling-5-burning.png");
+        for (std::size_t k = 0; k < marks.size(); ++k) {
+            for (const BarrelLeaks::Pool& p : leaks.pools()) {
+                const double heat = leaks.fire_at(p, marks[k].first, marks[k].second, game.kernel().ticks());
+                if (heat > 0.2 && first[k] < 0) first[k] = g;
+                hottest[k] = std::max(hottest[k], heat);
+            }
+        }
+    }
+    std::printf("rolling barrel: the trail burns, from where it rolled from:");
+    for (std::size_t k = 0; k < marks.size(); ++k) std::printf(" %.2f (frame %d)", hottest[k], first[k]);
+    std::printf("\n");
+    // All of it, the far end last.
+    CHECK(std::all_of(hottest.begin(), hottest.end(), [](double h) { return h > 0.2; }));
+    CHECK(first.front() >= first.back());
+    CHECK(game.machine().faults().empty() && game.machine().unbound_intrinsic_calls().empty());
+}
+
+// Leaking barrels: two barrels stacked one on the other (save
+// baril-empile-flaque-en-l-air.sav), the upper one pierced: its fuel runs
+// down the lower one to the floor, its pool lies there (it lay on the lower
+// barrel's top, where no floor is: none showed). TRAIL_SHOTS=<folder>: a
+// picture of it.
+void test_stacked_barrel_leak(const std::filesystem::path& data) {
+    Game game(data, test_saves(data));
+    game.config().barrel_leaks = true;
+    game.load_save_file(test_saves(data) / "baril-empile-flaque-en-l-air.sav");
+    World& w = game.world();
+    const Item* me = w.get(1);
+    CHECK(me != nullptr);
+    if (!me) return;
+    // The barrel nearest the player standing on another.
+    ObjId upper = 0, lower = 0;
+    double best = 1e18;
+    for (ObjId id : w.rect_search(me->x - 1024, me->y - 1024, me->x + 1024, me->y + 1024)) {
+        const Item* a = w.get(id);
+        if (!a || !is_fuel_barrel(a->shape) || a->parent != 0) continue;
+        for (ObjId other : w.rect_search(a->x - 64, a->y - 64, a->x + 64, a->y + 64)) {
+            const Item* b = w.get(other);
+            if (!b || other == id || !is_fuel_barrel(b->shape) || b->parent != 0) continue;
+            const ShapeInfo* info = w.shape_info(b->shape);
+            if (!info || a->z != b->z + info->footpad_z * 8 || std::abs(a->x - b->x) > 16 || std::abs(a->y - b->y) > 16)
+                continue;
+            const double dx = a->x - me->x, dy = a->y - me->y;
+            if (dx * dx + dy * dy < best) best = dx * dx + dy * dy, upper = id, lower = other;
+        }
+    }
+    CHECK(upper != 0);
+    if (!upper) return;
+    const Item* top = w.get(upper);
+    const Item* under = w.get(lower);
+    const World::Point spot = w.location(*top);
+    std::printf("stacked barrels: %u (shape 0x%X at %d,%d,%d) on %u (shape 0x%X at %d,%d,%d)\n", upper, top->shape,
+                top->x, top->y, top->z, lower, under->shape, under->x, under->y, under->z);
+    const std::int32_t ground = under->z;
+    Surface8 screen(Game::kScreenWidth, Game::kScreenHeight);
+    const auto run = [&](int frames) {
+        for (int f = 0; f < frames; ++f) {
+            game.update(kFrameUs);
+            game.render(screen);
+        }
+    };
+    // A bullet in its side facing the camera, halfway up.
+    const ShapeInfo* info = w.shape_info(top->shape);
+    apply_damage(game.kernel(), w, game.animations(), upper, 1, 0, 30, 2);
+    if (w.hooks().shot_landed) w.hooks().shot_landed(upper, spot.x + 2, spot.y + 2, spot.z + info->footpad_z * 4, 2);
+    run(120);
+    if (const char* shots = std::getenv("TRAIL_SHOTS"))
+        write_png(std::filesystem::path(shots) / "stacked-leak.png", screen, game.palette());
+    const BarrelLeaks& leaks = game.barrel_leaks();
+    CHECK(leaks.barrels().size() == 1);
+    if (leaks.barrels().size() != 1) return;
+    const BarrelLeaks::Barrel& b = leaks.barrels()[0];
+    const BarrelLeaks::Pool* pool = leaks.pool(b.pool);
+    CHECK(pool != nullptr);
+    if (!pool) return;
+    std::printf("stacked barrels: the upper one's floor %d, its pool at %d (the floor at %d), %zu lobes, level %.1f "
+                "of %.1f\n",
+                b.floor, pool->z, ground, pool->lobes.size(), b.level, b.height);
+    // On the floor under both (the pools are drawn on the floors at their level).
+    CHECK(b.floor == ground && std::abs(pool->z - ground) <= 2 && b.level < b.height * 0.9);
+    CHECK(game.machine().faults().empty() && game.machine().unbound_intrinsic_calls().empty());
+}
+
+// Timing of the leaking barrels (not a check): barrel 5070 of SAVEGAME.3
+// leaking, then blown up and burning, with the 3D lighting and its smoke
+// (CPU shading), on a `width` x `height` screen. Prints the mean and worst
+// milliseconds of update, render and shade over spans of frames, and the
+// smoke puffs and lights shaded. BENCH_NOSMOKE set: without the smoke.
+void bench_barrel_leaks(const std::filesystem::path& data, int width, int height) {
+    constexpr ObjId kBarrel = 5070;
+    Game game(data, test_saves(data));
+    game.config().barrel_leaks = true;
+    game.config().lighting = true;
+    game.config().volumetric_smoke = std::getenv("BENCH_NOSMOKE") == nullptr;
+    game.load_save(3);
+    World& w = game.world();
+    w.state.difficulty = 3;
+    const Item* barrel = w.get(kBarrel);
+    if (!barrel) return;
+    const World::Point spot = w.location(*barrel);
+    World::Point away = w.location(*w.get(1));
+    bool far = false;
+    for (int ring = 720; ring <= 1600 && !far; ring += 32) {
+        for (int k = 0; k < 16 && !far; ++k) {
+            const World::Point at{spot.x + kDirectionDx[k] * ring / 2, spot.y + kDirectionDy[k] * ring / 2, spot.z};
+            far = position_free(w, w.get(1)->shape, at, nullptr, 1);
+            if (far) away = at;
+        }
+    }
+    w.move_item(1, away.x, away.y, away.z);
+    Surface8 screen(width, height);
+    std::vector<std::uint32_t> argb;
+    using Clock = std::chrono::steady_clock;
+    const auto ms = [](Clock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
+    const auto span = [&](const char* what, int frames) {
+        double sum[3] = {}, worst[3] = {};
+        for (int f = 0; f < frames; ++f) {
+            const auto t0 = Clock::now();
+            game.update(kFrameUs);
+            const auto t1 = Clock::now();
+            game.render(screen);
+            const auto t2 = Clock::now();
+            game.render_lit(screen, argb);
+            const auto t3 = Clock::now();
+            const double d[3] = {ms(t1 - t0), ms(t2 - t1), ms(t3 - t2)};
+            for (int k = 0; k < 3; ++k) sum[k] += d[k], worst[k] = std::max(worst[k], d[k]);
+        }
+        const auto& leaks = game.barrel_leaks();
+        std::size_t burning = 0;
+        for (const auto& p : leaks.pools()) burning += p.burning;
+        const WorldLighting* lit = game.lighting();
+        std::printf("%-18s update %5.2f (%5.2f)  render %5.2f (%5.2f)  shade %5.2f (%5.2f) ms  pools %zu (%zu burning) "
+                    "drops %zu walls %zu puffs %zu lights %zu\n",
+                    what, sum[0] / frames, worst[0], sum[1] / frames, worst[1], sum[2] / frames, worst[2],
+                    leaks.pools().size(), burning, leaks.drops().size(), leaks.wall_fires().size(),
+                    lit ? lit->puffs_shown().size() : 0, lit ? lit->lights().size() : 0);
+    };
+    const auto hit = [&](int dx, int dy, int dz) {
+        apply_damage(game.kernel(), w, game.animations(), kBarrel, 1, 0, 30, 2);
+        if (w.hooks().shot_landed) w.hooks().shot_landed(kBarrel, spot.x + dx, spot.y + dy, spot.z + dz, 2);
+    };
+    std::printf("barrel bench %dx%d\n", width, height);
+    span("quiet", 30);
+    hit(8, 8, 20);
+    hit(20, 2, 10);
+    span("leaking", 300);
+    for (int hits = 2; hits < 12 && w.get(kBarrel) && w.get(kBarrel)->shape == 0xAA; ++hits) {
+        hit(8, 8, 20);
+        span("shot", 10);
+    }
+    span("blown up 0-0.5 s", 15);
+    span("burning 0.5-2 s", 45);
+    span("burning 2-5 s", 90);
+    span("burning 5-10 s", 150);
+    span("burnt", 300);
+}
+
 // Explosive barrels (BARRELUP 0xAA, SAVEGAME.3): their gotHit spawns BARREL,
 // which counts the damage in the npc number byte (ITEM_0574, a process that
 // ends at once: spawn hands its result over, INTER_1418_038b 0x57) and at 100
@@ -4694,6 +5501,7 @@ void test_wall_lasers(const std::filesystem::path& data) {
 void test_barrels(const std::filesystem::path& data) {
     constexpr ObjId kBarrel = 5070;
     Game game(data, test_saves(data));
+    game.config().barrel_leaks = false;  // the game's own damage (data/CRUSADER.CFG may set it)
     game.load_save(3);
     World& w = game.world();
     const Item* barrel = w.get(kBarrel);
@@ -4885,6 +5693,20 @@ void test_player_turret(const std::filesystem::path& data) {
                     game.world().get(turret) ? game.world().get(turret)->shape : 0, weapon_shape(game.world(), turret), shots);
         CHECK(turret > 1 && game.world().get(turret) && game.world().get(turret)->shape == 0x4C8);
         CHECK(shots >= 3);
+        // The right stick turns it to each of its 16 directions (it never
+        // aims: no crosshair), and it fires that way.
+        std::set<int> faced;
+        for (int step = 0; step < 64; ++step) {
+            game.set_aim_stick(true, step * 360.0 / 64);
+            for (int f = 0; f < 20; ++f) game.update(kFrameUs);
+            faced.insert(game.world().npc_direction(turret) & 0xF);
+        }
+        const int stick_shots = fire(game);
+        game.set_aim_stick(false, 0);
+        game.update(kFrameUs);
+        std::printf("player turret: stick, %zu directions, crosshair %d, %d shots\n", faced.size(),
+                    game.world().state.aim.crosshair, stick_shots);
+        CHECK(faced.size() == 16 && game.world().state.aim.crosshair == -1 && stick_shots >= 3);
         game.key(0x01, false, true, 0, 0x1B);  // Escape gives the control back
         game.key(0x01, false, false, 0, 0);
         for (int f = 0; f < 400; ++f) game.update(kFrameUs);
@@ -5243,7 +6065,7 @@ void test_kneeling_aim(const std::filesystem::path& data) {
         game.key(scancode, extended, false, 0);
         run(2);
     };
-    run(5);
+    run(10);
     World& w = game.world();
     const GameState::Aim& aim = w.state.aim;
     const auto kneeling = [&] { return (w.npc_record(1)[npc::kFlags13] & 0x04) != 0; };
@@ -6751,6 +7573,11 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (!have_test_saves(data)) return 1;
+    if (argc > 2 && std::string(argv[2]) == "--weapon-out") {
+        test_weapon_out_movement(data);
+        test_weapon_out_with_stance_bit_clear(data);
+        return failures ? 1 : 0;
+    }
     if (argc > 2 && std::string(argv[2]) == "--player-turret") {
         test_player_turret(data);
         return failures ? 1 : 0;
@@ -6788,6 +7615,47 @@ int main(int argc, char** argv) {
     }
     if (argc > 2 && std::string(argv[2]) == "--saved-busy") {
         test_saved_busy_items(data);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--rolling-barrel") {
+        test_rolling_barrel_trail(data);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--barrel-cook-off") {
+        test_barrel_cook_off(data);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--barrel-splash") {
+        test_barrel_splash(data);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--fire-behind-wall") {
+        test_fire_behind_wall(data);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--barrel-trail") {
+        test_barrel_trail(data);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--stacked-barrel") {
+        test_stacked_barrel_leak(data);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--barrels") {
+        test_barrels(data);
+        test_barrel_leaks(data);
+        test_barrel_splash(data);
+        test_fire_behind_wall(data);
+        test_barrel_cook_off(data);
+        test_barrel_trail(data);
+        test_rolling_barrel_trail(data);
+        test_stacked_barrel_leak(data);
+        std::printf(failures ? "%d failure(s)\n" : "all checks passed\n", failures);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--barrel-bench") {
+        bench_barrel_leaks(data, Game::kScreenWidth, Game::kScreenHeight);
+        bench_barrel_leaks(data, 1920, 1080);
         return failures ? 1 : 0;
     }
     if (argc > 2 && std::string(argv[2]) == "--camera-smoke") {
@@ -6976,6 +7844,13 @@ int main(int argc, char** argv) {
     test_weasel_buys_ammo_after_spent_clips(data);
     test_courier_keycard(data);
     test_barrels(data);
+    test_barrel_leaks(data);
+    test_barrel_splash(data);
+    test_fire_behind_wall(data);
+    test_barrel_cook_off(data);
+    test_barrel_trail(data);
+    test_rolling_barrel_trail(data);
+    test_stacked_barrel_leak(data);
     test_mines(data);
     test_shot_mine(data);
     test_station_pads(data);
@@ -7006,6 +7881,7 @@ int main(int argc, char** argv) {
     test_player_combat_flag(data);
     test_run_stop_stays_armed(data);
     test_weapon_out_movement(data);
+    test_weapon_out_with_stance_bit_clear(data);
     test_leave_surface(data);
     test_enemies(data);
     test_new_game(data);

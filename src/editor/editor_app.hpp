@@ -9,6 +9,7 @@
 #include "core/dtable.hpp"
 #include "editor/item_semantics.hpp"
 #include "editor/level.hpp"
+#include "editor/level_tools.hpp"
 #include "editor/project.hpp"
 #include "engine/usecode/usecode_file.hpp"
 #include "engine/world/render.hpp"
@@ -36,6 +37,7 @@ struct EditorOptions {
     std::filesystem::path game_exe;  // crusader(.exe), next to the editor
     int select_shape = -1;           // selects the first item of this shape at start
     bool new_map = false;            // starts with Map > New map (then saves)
+    std::filesystem::path prefabs = "prefabs";  // the prefabs folder (Prefabs tab)
 };
 
 class EditorApp {
@@ -53,7 +55,21 @@ public:
 
 private:
     // --- Brush: what a click in the view creates.
-    enum class BrushKind { None, Shape, Glob, TriggerEgg, TeleportArrival, TeleportDeparture, MonsterEgg };
+    // MissionStart places (or moves) the arrival egg 0x1E; TeleportPair
+    // places a departure, then its arrival, linked by a free id.
+    enum class BrushKind {
+        None,
+        Shape,
+        Glob,
+        TriggerEgg,
+        TeleportArrival,
+        TeleportDeparture,
+        MonsterEgg,
+        MissionStart,
+        TeleportPair,
+        MonsterPair,  // an NPC's MONSTER place and kind (value: NPC type)
+        Prefab,       // value: index in prefabs_
+    };
     struct Brush {
         BrushKind kind = BrushKind::None;
         std::uint16_t shape = 0;
@@ -101,6 +117,27 @@ private:
     void move_selection(std::int32_t dx, std::int32_t dy, std::int32_t dz);
     void select_only(std::uint32_t uid);
     void select_same_quality_low(std::uint8_t q);
+    // Link mode: each click in the view links the item to `link_source_`
+    // (same quality low), or unlinks it when it already was.
+    void start_link_mode(std::uint32_t source);
+    void toggle_link(std::uint32_t target);
+    // Clipboard (kept across maps).
+    void copy_selection(bool cut);
+    void paste();
+    // Puts copies of `items` (copied around `anchor` on `source_map`) on this
+    // map: with the anchor at `at` (x, y) and `z` when given, else beside the
+    // copy (at the same place on another map). Links renumbered as a paste.
+    void place_group(std::vector<LevelItem> items, const Point3& anchor, int source_map,
+                     std::optional<std::pair<std::int32_t, std::int32_t>> at, std::optional<std::int32_t> z);
+    // Examples of a shape in the original maps.
+    void find_examples(std::uint16_t shape);
+    void examples_window();
+    // Prefabs.
+    void load_prefabs();
+    void save_prefab(const std::string& name);
+    void tab_prefabs();
+    // Opens `map` (committing this one) and selects its arrival egg `id`.
+    void go_to_arrival(int map, std::uint8_t id);
     void glob_from_selection();
     void explode_glob(std::uint32_t egg_uid);
 
@@ -118,12 +155,27 @@ private:
     void semantic_properties(LevelItem& item, std::uint8_t family);
     void script_properties(const LevelItem& item, std::uint8_t family);
     void contents_editor(LevelItem& item);
+    void monster_pair_properties(LevelItem& item);
+    // The NPC types of DTABLE.FLX as a combo; true when `type` changed.
+    bool npc_type_combo(const char* label, int& type);
+    bool activity_combo(const char* label, int& activity);
     void glob_window();
     void modal_popups();
+    void problems_window();
+    void hover_tooltip();
 
     // --- Helpers.
     std::uint8_t family_of(std::uint16_t shape) const;
     bool links_by_quality(const LevelItem& item) const;
+    // It acts through the TRIGGER library on the shape its map and NPC
+    // numbers name (trigger_target): switches, panels, plates, cameras...
+    bool acts_through_trigger(const LevelItem& item) const;
+    LevelInfo level_info() const;
+    // Arrival ids of a map (this one: the level being edited).
+    std::map<std::uint8_t, int> arrivals_of(int map);
+    void maps_changed() { arrivals_cache_.clear(); }
+    void run_checks();
+    const LevelItem* find_start_egg() const;
     std::string shape_name(std::uint16_t shape) const;
     std::string class_name(std::uint16_t cid) const;
     int frame_count(std::uint16_t shape);
@@ -145,6 +197,10 @@ private:
     std::optional<XformTable> xform_;
     std::unique_ptr<UsecodeFile> usecode_;
     std::optional<dtable::NpcTypes> npc_types_;
+    std::size_t busiest_records_ = 8000;  // the game's busiest original map
+    std::uint16_t trigger_class_ = 0;     // the TRIGGER library class
+    std::vector<bool> trigger_source_;    // shapes acting on the shape they name (find_trigger_users)
+    TriggerSettings trigger_settings_;    // the original maps' settings (trigger_settings)
 
     // The map being edited.
     int map_ = 1;
@@ -194,6 +250,42 @@ private:
     bool box_selecting_ = false;
 
     Brush brush_;
+    std::uint32_t pair_departure_ = 0;  // TeleportPair: the departure placed, waiting for its arrival
+    std::uint32_t link_source_ = 0;     // link mode
+    std::uint32_t hovered_ = 0;         // item under the pointer
+    double hover_since_ = 0;
+
+    // Clipboard.
+    std::vector<LevelItem> clipboard_;
+    std::vector<LevelItem> deferred_items_;  // made in the properties panel, added after it
+
+    // Examples of a shape in the original maps.
+    struct Example {
+        int map = 0;
+        std::int32_t x = 0, y = 0, z = 0;
+        int linked = 0;
+        std::string label;
+    };
+    std::vector<Example> examples_;
+    std::uint16_t examples_shape_ = 0;
+    bool examples_open_ = false;
+
+    // Prefabs.
+    struct PrefabEntry {
+        std::string name;
+        Prefab prefab;
+    };
+    std::vector<PrefabEntry> prefabs_;
+    bool want_save_prefab_ = false;
+    std::string prefab_name_;
+    Point3 clipboard_anchor_{};
+    int clipboard_map_ = 0;
+    bool paste_relinks_ = true;
+
+    // Level check.
+    std::vector<Problem> problems_;
+    bool problems_open_ = false;
+    std::map<int, std::map<std::uint8_t, int>> arrivals_cache_;
 
     // Palettes.
     std::string shape_filter_;
