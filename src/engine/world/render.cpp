@@ -178,7 +178,7 @@ std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes,
 
 // @orig ?: display list (DLIST.C), not located
 std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes, const View& view, int w, int h,
-                                         RenderStats* stats, bool walk_all) {
+                                         RenderStats* stats, const DisplayExtras* extras, bool walk_all) {
     RenderStats local;
     RenderStats& st = stats ? *stats : local;
     st = {};
@@ -189,6 +189,7 @@ std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes,
     const auto consider = [&](const Item& item) {
         ++st.visited;
         if (item.off_map || item.parent != 0 || (item.flags & (kItemInvisible | kItemContained | kItemEthereal))) return;
+        if (extras && std::binary_search(extras->hidden.begin(), extras->hidden.end(), item.id)) return;
         const ShapeInfo* info = world.shape_info(item.shape);
         if (info && info->is(ShapeInfo::kEditor)) return;  // editor-only markers
         const Shape* shape = shapes.get(item.shape);
@@ -231,6 +232,33 @@ std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes,
         world.for_each_near_view(view.left, view.top, w, h, *reach, consider);
     } else {
         world.for_each(consider);
+    }
+    // Port addition: the extra sprites, placed as items are.
+    if (extras) {
+        for (const ExtraSprite& e : extras->sprites) {
+            if (!e.proxy || !e.frame) continue;
+            DrawItem d{};
+            d.item = e.proxy;
+            d.frame = e.frame;
+            d.mirrored = e.mirrored;
+            d.x = e.x;
+            d.y = e.y;
+            d.z = e.z;
+            d.x_left = e.x_left;
+            d.y_far = e.y_far;
+            d.z_top = e.z_top;
+            d.sx = project_x(d.x, d.y) - cam_sx + w / 2;
+            d.sy = project_y(d.x, d.y, d.z) - cam_sy + h / 2;
+            d.sx_left = project_x(d.x_left, d.y) - cam_sx + w / 2;
+            d.shape_flags = 0;
+            const int fw = d.frame->width, fh = d.frame->height;
+            d.left = d.mirrored ? d.sx + d.frame->xoff - (fw - 1) : d.sx - d.frame->xoff;
+            d.top = d.sy - d.frame->yoff;
+            d.right = d.left + fw;
+            d.bottom = d.top + fh;
+            if (d.right <= 0 || d.bottom <= 0 || d.left >= w || d.top >= h) continue;
+            items.push_back(d);
+        }
     }
     st.candidates = items.size();
 

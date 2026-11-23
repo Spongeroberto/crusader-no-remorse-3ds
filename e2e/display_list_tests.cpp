@@ -58,7 +58,7 @@ void compare(Game& game, ShapeCache& shapes, int w, int h, const char* phase, To
     const View view{s.view_left + (s.screen_right + 1 - w) / 2, s.view_top + (s.screen_bottom + 1 - h) / 2};
     RenderStats near_stats, all_stats;
     const auto near = build_display_list(game.world(), shapes, view, w, h, &near_stats);
-    const auto all = build_display_list(game.world(), shapes, view, w, h, &all_stats, true);
+    const auto all = build_display_list(game.world(), shapes, view, w, h, &all_stats, nullptr, true);
     ++t.frames;
     if (near_stats.visited < all_stats.visited) ++t.near_frames;
     t.visited_near += near_stats.visited;
@@ -88,7 +88,7 @@ void sweep(const World& world, ShapeCache& shapes, const char* map, Totals& t) {
             RenderStats near_stats, all_stats;
             const auto near = build_display_list(world, shapes, View{left, top}, w, h, &near_stats);
             if (near.empty()) continue;  // nothing there: say nothing about the far cells
-            const auto all = build_display_list(world, shapes, View{left, top}, w, h, &all_stats, true);
+            const auto all = build_display_list(world, shapes, View{left, top}, w, h, &all_stats, nullptr, true);
             ++t.frames;
             if (near_stats.visited < all_stats.visited) ++t.near_frames;
             t.visited_near += near_stats.visited;
