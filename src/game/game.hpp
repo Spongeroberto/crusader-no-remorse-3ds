@@ -232,7 +232,8 @@ public:
     // Port addition: on a half-resolution screen (Surface8::half), a screen
     // drawn over the view that reports its area (the computer, the keypad,
     // the dialogs) is shown at full size over the halved scene, when it fits
-    // in the stored picture, so that its text stays readable (the 3DS).
+    // in the stored picture, so that its text stays readable (the 3DS). The
+    // items just picked up (top left) are drawn at full size too.
     void set_overlay_zoom(bool zoom) { overlay_zoom_ = zoom; }
     // Controller screen (options): it waits for a button press to bind, which
     // the platform gives with pad_button() instead of sending its key.

@@ -52,6 +52,18 @@ struct Surface8 {
         return v;
     }
 
+    // The stored pixels of `s` as a full-resolution picture of their own
+    // size (all of `s` when it is not at half resolution): what is drawn into
+    // it shows pixel for pixel, twice the size it would be drawn into `s`.
+    // Same rules as window().
+    static Surface8 stored(Surface8& s) {
+        Surface8 v = window(s, 0, 0, s.width, s.height);
+        v.width = s.stored_width();
+        v.height = s.stored_height();
+        v.half_ = false;
+        return v;
+    }
+
     // Depth, for stereoscopic 3D: an optional byte per stored pixel, laid out
     // as the pixels: kDepthScreen at the screen plane, one more per two units
     // of height above it (depth_byte). While one is attached, ShapeFrame::draw

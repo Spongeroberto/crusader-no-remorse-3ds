@@ -2285,7 +2285,16 @@ void Game::render_view(Surface8& screen, RenderStats* stats, bool keep_view) {
                              [this](Surface8& s) { status_bar_.draw(s, *world_); });
     }
     // DISPLAY_1190_010f, not in the menu mode (DS:2CEE, set with DS:2D8F).
-    if (!sprites_suspended_) pickup_area_.draw(screen, world_->state.pickups);
+    // Port: on a half-resolution screen with set_overlay_zoom, at full size
+    // in the stored pixels, the name readable.
+    if (!sprites_suspended_) {
+        if (screen.half_resolution() && overlay_zoom_) {
+            Surface8 stored = Surface8::stored(screen);
+            pickup_area_.draw(stored, world_->state.pickups);
+        } else {
+            pickup_area_.draw(screen, world_->state.pickups);
+        }
+    }
     if (profile_clock_) {
         profile_.clear_us += t_cleared - t_start;
         profile_.list_us += t_listed - t_cleared;
