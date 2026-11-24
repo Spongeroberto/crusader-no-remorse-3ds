@@ -2826,6 +2826,67 @@ void test_egg_hatched_before_save(const std::filesystem::path& data) {
     CHECK(game.machine().faults().empty());
 }
 
+// Issue #33: the reporter's save (German 1.07, mission 1) was made while the
+// floating platform 819 (HOVER1) crossed the acid pool, on its way to
+// waypoint 1 (QHi 0x21, status 0x1000). HOVER's event 0x21 moves it from
+// waypoint to waypoint for good; its enterFastArea does not start it again
+// (busy bit set, and QHi bit 0x20). The processes are not loaded: it stood
+// still after the load. It travels again, and keeps on.
+void test_hover_platform_after_load(const std::filesystem::path& data) {
+    constexpr ObjId kPlatform = 819;
+    Game game(data, test_saves(data));
+    game.load_save_file(test_saves(data) / "issue33-plateforme-flottante-immobile.sav");
+    World& w = game.world();
+    const Item* platform = w.get(kPlatform);
+    CHECK(w.current_map() == 1 && platform && platform->shape == 0x4F0);
+    if (!platform) return;
+    // Distinct places the platform went through, frame by frame.
+    auto travel = [&](int frames) {
+        std::set<std::pair<std::int32_t, std::int32_t>> places{{platform->x, platform->y}};
+        for (int f = 0; f < frames; ++f) {
+            game.update(kFrameUs);
+            places.emplace(platform->x, platform->y);
+        }
+        return places.size();
+    };
+    const std::size_t first = travel(600);
+    const std::size_t later = travel(600);
+    std::printf("hover platform after load: %zu then %zu places, at (%d, %d), status 0x%04X\n", first, later,
+                platform->x, platform->y, platform->flags);
+    CHECK(first > 10 && later > 10);
+    CHECK(platform->flags & 0x1000);
+    CHECK(game.machine().faults().empty());
+}
+
+// Issue #33, the base: the reporter's save (map 40) caught the scenery guard
+// 673 (REB_GAR) halfway through his move, frame 31 for a rest frame of 24
+// (QLo). The rebuilt fast area made 31 his rest frame, and each move took
+// him through frames 32..38 (32 empty, the others missing): he blinked out
+// and back. His rest frame is 24 again; he only shows his frames 24..31, or
+// stays away (frame 32) when his enterFastArea draws it.
+void test_scenery_guard_after_load(const std::filesystem::path& data) {
+    constexpr ObjId kGuard = 673;
+    Game game(data, test_saves(data));
+    game.load_save_file(test_saves(data) / "issue33-base-resistance-objets-clignotent.sav");
+    World& w = game.world();
+    const Item* guard = w.get(kGuard);
+    CHECK(w.current_map() == 40 && guard && guard->shape == 0x4EC);
+    if (!guard) return;
+    const int rest = guard->quality & 0xFF;
+    std::set<int> frames{guard->frame};
+    for (int f = 0; f < 3000; ++f) {
+        game.update(kFrameUs);
+        frames.insert(guard->frame);
+    }
+    const bool away = frames == std::set<int>{32};
+    const bool own = *frames.begin() >= 24 && *frames.rbegin() <= 31;
+    std::printf("scenery guard after load: rest frame %d, %zu frames %d..%d%s\n", rest, frames.size(),
+                *frames.begin(), *frames.rbegin(), away ? " (away)" : "");
+    CHECK(rest == 24);
+    CHECK(away || (own && frames.size() == 8));
+    CHECK(game.machine().faults().empty());
+}
+
 // Status 0x1000 saved while a process of the item's class ran (the
 // processes are not loaded): a running timer (TIMER) and a rolling roller
 // (ROLLB_NS, ROLLB_EW) get their loop started again (events 0x20 and 0x21),
@@ -7758,6 +7819,14 @@ int main(int argc, char** argv) {
         test_egg_hatched_before_save(data);
         return failures ? 1 : 0;
     }
+    if (argc > 2 && std::string(argv[2]) == "--scenery-guard") {
+        test_scenery_guard_after_load(data);
+        return failures ? 1 : 0;
+    }
+    if (argc > 2 && std::string(argv[2]) == "--hover-platform") {
+        test_hover_platform_after_load(data);
+        return failures ? 1 : 0;
+    }
     if (argc > 2 && std::string(argv[2]) == "--saved-busy") {
         test_saved_busy_items(data);
         return failures ? 1 : 0;
@@ -7960,6 +8029,8 @@ int main(int argc, char** argv) {
     test_keypad_door_after_reload(data);
     test_egg_hatched_before_save(data);
     test_saved_busy_items(data);
+    test_hover_platform_after_load(data);
+    test_scenery_guard_after_load(data);
     test_monitor(data);
     test_security_camera(data);
     test_camera_in_wide_view(data);

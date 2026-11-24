@@ -88,13 +88,13 @@ bool steams(std::uint16_t shape) {
 
 // The liquids' radioactive green, and how much of their own colour they glow
 // with (times liquid_glow), so that they show but stay a background.
-const Vec3 kLiquidTint{0.45f, 1.0f, 0.35f};
-constexpr float kLiquidGlow = 1.4f;
+const Vec3 kLiquidTint{0.35f, 1.0f, 0.15f};
+constexpr float kLiquidGlow = 2.0f;
 // Their light on what is around them: one by 1024 x 1024 cell of liquid.
 constexpr float kLiquidCell = 1024;
-constexpr float kLiquidLight = 2.0f;
+constexpr float kLiquidLight = 3.0f;
 // The ambient light near them, at most this much lower (liquid_dim).
-constexpr float kLiquidDim = 0.75f;
+constexpr float kLiquidDim = 0.9f;
 constexpr std::size_t kMaxSteam = 128;
 
 // Light fixtures (SHAPES.FLX; no TYPEFLAG bit marks them): the frames where
@@ -368,6 +368,21 @@ std::optional<FlashKind> muzzle_flash(int fire_type) {
 }
 
 float srgb_to_linear(std::uint8_t c) { return std::pow(c / 255.0f, 2.2f); }
+
+float fract(float v) { return v - std::floor(v); }
+
+// 1 / each coordinate of a segment's direction, kept finite (box slabs).
+Vec3 inverse_dir(const Vec3& d) {
+    return {1 / (std::abs(d.x) > 1e-6f ? d.x : 1e-6f), 1 / (std::abs(d.y) > 1e-6f ? d.y : 1e-6f),
+            1 / (std::abs(d.z) > 1e-6f ? d.z : 1e-6f)};
+}
+
+// Interleaved gradient noise (Jimenez 2014) at a pixel of the world picture,
+// anchored to the world (view offset added) so that it scrolls with it: how
+// a soft shadow's samples are turned there. The same on the GPU
+// (gl_lighting.cpp jitterAt).
+// @orig none: port lighting (soft shadows)
+float pixel_jitter(int x, int y) { return fract(52.9829189f * fract(0.06711056f * float(x) + 0.00583715f * float(y))); }
 
 // How much of a spot's light goes to a point `to` away from the light (to =
 // light - point) at distance `dist`: 1 for a light all round.
@@ -691,6 +706,15 @@ void WorldLighting::capture(const World& world, const std::vector<DrawItem>& lis
         actor_[i] = is_actor(*list_[i].item, world.shape_info(list_[i].item->shape));
         liquid_[i] = opt.liquids && !actor_[i] && !list_[i].item->sprite_only && is_liquid(list_[i].item->shape);
     }
+    // The items just off screen: their lights reach into the view before
+    // they show (issue #32). A light of radius r reaches half r pixels from
+    // its own (the screen culling of shade), 450 for the largest (900).
+    constexpr int kLightMargin = 480;
+    around_ = items_around_view(world, shapes_, View{view_left, view_top}, width_, height_, kLightMargin);
+    std::erase_if(around_, [&](const DrawItem& d) {
+        return d.right > 0 && d.bottom > 0 && d.left < width_ && d.top < height_;  // in list_
+    });
+    for (const DrawItem& d : around_) decode(*d.frame);
     if (opt.liquids) gather_liquids(world);
     else liquids_.clear();
     if (opt.smoke) gather_jets(world);
@@ -989,6 +1013,7 @@ bool WorldLighting::by_jet(const Vec3& p) const {
 void WorldLighting::liquid_lights(std::vector<PointLight>& lights) const {
     struct Cell {
         float area = 0, x = 0, y = 0, z = 0;
+        float lox = 1e9f, loy = 1e9f, hix = -1e9f, hiy = -1e9f;  // the liquid's extent
     };
     std::map<std::pair<int, int>, Cell> cells;
     for (const Liquid& l : liquids_) {
@@ -999,6 +1024,10 @@ void WorldLighting::liquid_lights(std::vector<PointLight>& lights) const {
         c.x += cx * area;
         c.y += cy * area;
         c.z += l.hi.z * area;
+        c.lox = std::min(c.lox, l.lo.x);
+        c.loy = std::min(c.loy, l.lo.y);
+        c.hix = std::max(c.hix, l.hi.x);
+        c.hiy = std::max(c.hiy, l.hi.y);
     }
     const float t = ticks_ / 60.0f;
     const float breathe = 0.85f + 0.15f * std::sin(t * 1.1f);
@@ -1009,7 +1038,11 @@ void WorldLighting::liquid_lights(std::vector<PointLight>& lights) const {
         PointLight light{at, kLiquidTint * (kLiquidLight * share * breathe), 1600, 0};
         light.liquid = true;
         light.dim = share;
-        lights.push_back(light);
+        // The glow comes from the whole surface: a source as wide as the
+        // liquid of the cell, whose shadows are soft (issue #29: as a point,
+        // the walkways over the acid threw long hard shadows on the floor).
+        light.area_x = (c.hix - c.lox) * 0.5f;
+        light.area_y = (c.hiy - c.loy) * 0.5f;        lights.push_back(light);
     }
 }
 
@@ -1237,6 +1270,53 @@ void WorldLighting::puff_states(std::vector<PuffState>& out) const {
               [](const PuffState& a, const PuffState& b) { return dot(a.centre, kToViewer) < dot(b.centre, kToViewer); });
 }
 
+// Whether a box (lo, hi) can hide part of a level rectangle source (centre
+// c, half sizes ax, ay) from o: the segments from o to it cross the box's z
+// slab between t0 and t1 (of their length), and over those the x and y spans
+// they sweep meet the box's. Conservative, a few operations: it leaves out
+// the boxes beside the beam before testing each segment.
+// @orig none: port lighting (soft shadows)
+bool beam_meets(const Vec3& lo, const Vec3& hi, const Vec3& o, const Vec3& c, float ax, float ay) {
+    float t0 = 1e-3f, t1 = 0.98f;
+    const float dz = c.z - o.z;
+    if (std::abs(dz) > 1e-3f) {
+        float ta = (lo.z - o.z) / dz, tb = (hi.z - o.z) / dz;
+        if (ta > tb) std::swap(ta, tb);
+        t0 = std::max(t0, ta);
+        t1 = std::min(t1, tb);
+        if (t0 > t1) return false;
+    } else if (o.z < lo.z || o.z > hi.z) {
+        return false;
+    }
+    const float os[2] = {o.x, o.y}, cs[2] = {c.x, c.y}, as[2] = {ax, ay}, los[2] = {lo.x, lo.y}, his[2] = {hi.x, hi.y};
+    for (int a = 0; a < 2; ++a) {
+        const float near = cs[a] - as[a] - os[a], far = cs[a] + as[a] - os[a];
+        const float from = os[a] + std::min(t0 * near, t1 * near), to = os[a] + std::max(t0 * far, t1 * far);
+        if (to < los[a] || from > his[a]) return false;
+    }
+    return true;
+}
+
+// @orig none: port lighting (muzzle flash)
+Vec3 out_of_box(const World& world, ObjId item, Vec3 pos, const Vec3& ahead) {
+    constexpr float kClear = 4;
+    const Item* it = world.get(item);
+    const ShapeInfo* info = it ? world.shape_info(it->shape) : nullptr;
+    if (!info) return pos;
+    const bool mirrored = it->flags & kItemFlipped;
+    const float x = float(world_from_usecode(it->x)), y = float(world_from_usecode(it->y));
+    const float dx = float((mirrored ? info->footpad_y : info->footpad_x) * kFootpadXY);
+    const float dy = float((mirrored ? info->footpad_x : info->footpad_y) * kFootpadXY);
+    const float z0 = it->z * kLightZScale, z1 = (it->z + info->footpad_z * kFootpadZ) * kLightZScale;
+    const float lo[2] = {x - dx - kClear, y - dy - kClear}, hi[2] = {x + kClear, y + kClear};
+    const float p[2] = {pos.x, pos.y}, d[2] = {ahead.x, ahead.y};
+    if (p[0] <= lo[0] || p[0] >= hi[0] || p[1] <= lo[1] || p[1] >= hi[1] || pos.z < z0 || pos.z > z1) return pos;
+    float t = 1e9f;
+    for (int a = 0; a < 2; ++a)
+        if (std::abs(d[a]) > 1e-4f) t = std::min(t, ((d[a] > 0 ? hi[a] : lo[a]) - p[a]) / d[a]);
+    return t < 1e9f ? pos + ahead * t : pos;
+}
+
 // @orig none: port lighting
 void WorldLighting::shot_fired(ObjId shooter, std::int32_t x, std::int32_t y, std::int32_t z, int dir, int fire_type,
                                std::uint32_t ticks) {
@@ -1250,12 +1330,18 @@ void WorldLighting::shot_fired(ObjId shooter, std::int32_t x, std::int32_t y, st
                     ahead * 10.0f;
     // Each flash a little brighter or dimmer than the last.
     const float flicker = 0.85f + 0.3f * float(hash32(ticks * 2654435761u + shooter) & 0xFF) / 255.0f;
-    flashes_.push_back({at, kind->colour * (kind->strength * flicker), kind->radius, ticks, kind->life, shooter});
+    flashes_.push_back({at, ahead, kind->colour * (kind->strength * flicker), kind->radius, ticks, kind->life, shooter});
 }
 
 // @orig none: port lighting
 void WorldLighting::gather_lights(const World& world, const LightingOptions& opt, std::vector<PointLight>& lights) {
-    for (const DrawItem& d : list_) {
+    // The items drawn, and those just off screen.
+    std::vector<const DrawItem*> items;
+    items.reserve(list_.size() + around_.size());
+    for (const DrawItem& d : list_) items.push_back(&d);
+    for (const DrawItem& d : around_) items.push_back(&d);
+    for (const DrawItem* item : items) {
+        const DrawItem& d = *item;
         const Decoded& f = decoded(d.frame);
         if (d.item->sprite_only) {
             if (!opt.flash_lights) continue;
@@ -1369,12 +1455,15 @@ void WorldLighting::gather_lights(const World& world, const LightingOptions& opt
         lights.push_back({centre, col * strength, 260.0f + std::min(f.glow_pixels, 200) * 2.0f, d.item->id});
     }
     if (opt.flash_lights) {
-        // Muzzle flashes: full on the tick of the shot, then fading out.
+        // Muzzle flashes: full on the tick of the shot, then fading out. Owned
+        // by no item: the shooter casts its shadow, behind it on the floor and
+        // the walls (issue #29), from just out of its box.
         for (const MuzzleFlash& f : flashes_) {
             const float age = float(ticks_ - f.born) / float(f.life);
             if (age >= 1) continue;
             const float k = (1 - age) * (1 - age);
-            lights.push_back({f.pos, f.colour * k, f.radius * (0.6f + 0.4f * k), f.owner});
+            lights.push_back({out_of_box(world, f.owner, f.pos, f.ahead), f.colour * k,
+                              f.radius * (0.6f + 0.4f * k), 0});
         }
     }
     if (opt.player_lamp) {
@@ -1408,10 +1497,10 @@ void WorldLighting::gather_occluders(const World& world) {
     if (lights_.empty()) return;
     float lox = 1e9f, loy = 1e9f, hix = -1e9f, hiy = -1e9f;
     for (const PointLight& l : lights_) {
-        lox = std::min(lox, l.pos.x - l.radius);
-        loy = std::min(loy, l.pos.y - l.radius);
-        hix = std::max(hix, l.pos.x + l.radius);
-        hiy = std::max(hiy, l.pos.y + l.radius);
+        lox = std::min(lox, l.pos.x - l.radius - l.area_x);
+        loy = std::min(loy, l.pos.y - l.radius - l.area_y);
+        hix = std::max(hix, l.pos.x + l.radius + l.area_x);
+        hiy = std::max(hiy, l.pos.y + l.radius + l.area_y);
     }
     world.for_each([&](const Item& item) {
         if (item.off_map || item.parent != 0 || item.sprite_only ||
@@ -1445,10 +1534,13 @@ void WorldLighting::gather_occluders(const World& world) {
     });
     for (std::size_t l = 0; l < lights_.size(); ++l) {
         const PointLight& L = lights_[l];
+        // Between a lit point (within the radius) and the source (within its
+        // spread).
+        const float rx = L.radius + L.area_x, ry = L.radius + L.area_y;
         for (std::uint32_t i = 0; i < boxes_.size(); ++i) {
             const Box& b = boxes_[i];
-            if (b.hi.x < L.pos.x - L.radius || b.lo.x > L.pos.x + L.radius || b.hi.y < L.pos.y - L.radius ||
-                b.lo.y > L.pos.y + L.radius || b.hi.z < L.pos.z - L.radius || b.lo.z > L.pos.z + L.radius)
+            if (b.hi.x < L.pos.x - rx || b.lo.x > L.pos.x + rx || b.hi.y < L.pos.y - ry || b.lo.y > L.pos.y + ry ||
+                b.hi.z < L.pos.z - L.radius || b.lo.z > L.pos.z + L.radius)
                 continue;
             per_light_[l].push_back(i);
         }
@@ -1456,54 +1548,127 @@ void WorldLighting::gather_occluders(const World& world) {
 }
 
 // Whether a box hides light `l` from point p: the segment from just off the
-// surface to the light crosses an opaque part of it.
+// surface to the light (to `at`, a point of a spread one, when given)
+// crosses an opaque part of it.
 // @orig none: port lighting
 bool WorldLighting::occluded(const Vec3& p, const Vec3& n, ObjId self, std::size_t light, bool sprite_cut,
-                             const std::vector<std::uint32_t>& boxes) const {
+                             const std::vector<std::uint32_t>& boxes, const Vec3* at) const {
     const PointLight& L = lights_[light];
     const Vec3 o = p + n * 3.0f;
-    const Vec3 dir = L.pos - o;
-    const float os[3] = {o.x, o.y, o.z};
-    const float is[3] = {1 / (std::abs(dir.x) > 1e-6f ? dir.x : 1e-6f), 1 / (std::abs(dir.y) > 1e-6f ? dir.y : 1e-6f),
-                         1 / (std::abs(dir.z) > 1e-6f ? dir.z : 1e-6f)};
+    const Vec3 dir = (at ? *at : L.pos) - o;
+    const Vec3 inv = inverse_dir(dir);
     for (std::uint32_t bi : boxes) {
         const Box& b = boxes_[bi];
         if (b.owner == self || b.owner == L.owner) continue;
-        // Ends excluded: a light or a surface touching a box is not hidden by it.
-        float t0 = 1e-3f, t1 = 0.98f;
-        const float lo[3] = {b.lo.x, b.lo.y, b.lo.z}, hi[3] = {b.hi.x, b.hi.y, b.hi.z};
-        bool inside = true;
-        for (int a = 0; a < 3 && inside; ++a) {
-            float ta = (lo[a] - os[a]) * is[a], tb = (hi[a] - os[a]) * is[a];
-            if (ta > tb) std::swap(ta, tb);
-            t0 = std::max(t0, ta);
-            t1 = std::min(t1, tb);
-            inside = t0 <= t1;
-        }
-        if (!inside) continue;
-        if (!sprite_cut || !b.sprite) return true;
-        const Decoded& f = *b.sprite;
-        constexpr int kSamples = 5;
-        for (int k = 0; k < kSamples; ++k) {
-            const float t = t0 + (t1 - t0) * (k + 0.5f) / kSamples;
-            const Vec3 q = o + dir * t;
-            const int sx = static_cast<int>(std::floor((q.x - q.y) * 0.25f));
-            const int sy = static_cast<int>(std::floor((q.x + q.y) * 0.125f - q.z / kLightZScale));
-            const int fx = b.mirrored ? b.left + f.w - 1 - sx : sx - b.left;
-            const int fy = sy - b.top;
-            if (fx < 0 || fy < 0 || fx >= f.w || fy >= f.h) continue;
-            if (f.color[fy * f.w + fx] >= 0) return true;
-        }
+        if (box_hides(b, o, dir, inv, sprite_cut)) return true;
     }
     return false;
 }
 
+// Whether box `b` hides the segment from o to o + dir (`inv` its
+// inverse_dir): crosses it (ends
+// excluded: a light or a surface touching a box is not hidden by it), cut by
+// its sprite when `sprite_cut`.
+// @orig none: port lighting
+bool WorldLighting::box_hides(const Box& b, const Vec3& o, const Vec3& dir, const Vec3& inv, bool sprite_cut) {
+    const float os[3] = {o.x, o.y, o.z};
+    const float is[3] = {inv.x, inv.y, inv.z};
+    float t0 = 1e-3f, t1 = 0.98f;
+    const float lo[3] = {b.lo.x, b.lo.y, b.lo.z}, hi[3] = {b.hi.x, b.hi.y, b.hi.z};
+    for (int a = 0; a < 3; ++a) {
+        float ta = (lo[a] - os[a]) * is[a], tb = (hi[a] - os[a]) * is[a];
+        if (ta > tb) std::swap(ta, tb);
+        t0 = std::max(t0, ta);
+        t1 = std::min(t1, tb);
+        if (t0 > t1) return false;
+    }
+    if (!sprite_cut || !b.sprite) return true;
+    const Decoded& f = *b.sprite;
+    constexpr int kSamples = 5;
+    for (int k = 0; k < kSamples; ++k) {
+        const float t = t0 + (t1 - t0) * (k + 0.5f) / kSamples;
+        const Vec3 q = o + dir * t;
+        const int sx = static_cast<int>(std::floor((q.x - q.y) * 0.25f));
+        const int sy = static_cast<int>(std::floor((q.x + q.y) * 0.125f - q.z / kLightZScale));
+        const int fx = b.mirrored ? b.left + f.w - 1 - sx : sx - b.left;
+        const int fy = sy - b.top;
+        if (fx < 0 || fy < 0 || fx >= f.w || fy >= f.h) continue;
+        if (f.color[fy * f.w + fx] >= 0) return true;
+    }
+    return false;
+}
+
+// The share (0..1) of light `l` that point p sees past the boxes: all or
+// nothing for a point light; for a spread one, of kAreaSamples points of it
+// (an R2 sequence over its rectangle, turned by the pixel's `jitter`), so
+// that its shadows are soft. Box by box, only those in the bounds of p and
+// the source, against the points not hidden yet. The same on the GPU
+// (gl_lighting.cpp seenShare).
+// @orig none: port lighting (soft shadows)
+float WorldLighting::seen_share(const Vec3& p, const Vec3& n, ObjId self, std::size_t light, bool sprite_cut,
+                                const std::vector<std::uint32_t>& boxes, float jitter) const {
+    const PointLight& L = lights_[light];
+    if (L.area_x <= 0 && L.area_y <= 0) return occluded(p, n, self, light, sprite_cut, boxes) ? 0.0f : 1.0f;
+    if (boxes.empty()) return 1;
+    const Vec3 o = p + n * 3.0f;
+    std::array<Vec3, kAreaSamples> dirs, invs;
+    for (int k = 0; k < kAreaSamples; ++k) {
+        const float u = fract(jitter + float(k) * 0.7548776662f);
+        const float v = fract(jitter * 0.618034f + float(k) * 0.5698402910f);
+        dirs[k] = L.pos + Vec3{(2 * u - 1) * L.area_x, (2 * v - 1) * L.area_y, 0} - o;
+        invs[k] = inverse_dir(dirs[k]);
+    }
+    // The boxes in the beam from o to the source (kept for both passes while
+    // they fit, else found again).
+    const auto in_beam = [&](std::uint32_t bi) {
+        const Box& b = boxes_[bi];
+        return b.owner != self && b.owner != L.owner && beam_meets(b.lo, b.hi, o, L.pos, L.area_x, L.area_y);
+    };
+    std::array<std::uint32_t, 128> beam;
+    std::size_t beam_size = 0;
+    bool overflow = false;
+    for (std::uint32_t bi : boxes) {
+        if (!in_beam(bi)) continue;
+        if (beam_size == beam.size()) {
+            overflow = true;
+            break;
+        }
+        beam[beam_size++] = bi;
+    }
+    if (beam_size == 0) return 1;
+    const std::size_t tested = overflow ? boxes.size() : beam_size;
+    // How many of points k0..k1 - 1 are hidden.
+    const auto hidden = [&](int k0, int k1) {
+        std::uint32_t mask = 0;
+        int count = 0;
+        for (std::size_t j = 0; j < tested; ++j) {
+            if (overflow && !in_beam(boxes[j])) continue;
+            const Box& b = boxes_[overflow ? boxes[j] : beam[j]];
+            for (int k = k0; k < k1; ++k) {
+                if (mask & (1u << k) || !box_hides(b, o, dirs[k], invs[k], sprite_cut)) continue;
+                mask |= 1u << k;
+                ++count;
+            }
+            if (count == k1 - k0) break;
+        }
+        return count;
+    };
+    // The first points, spread over the source, first: when they all agree
+    // (all seen, all hidden), so does the rest, but in a thin penumbra.
+    const int first = hidden(0, kAreaFirst);
+    if (first == 0) return 1;
+    if (first == kAreaFirst) return 0;
+    return 1 - float(first + hidden(kAreaFirst, kAreaSamples)) / kAreaSamples;
+}
+
 // Linear colour of palette entry c at a point lit by the lights `ids`, with
-// `boxes` (when given) the occluders of each, in the same order.
+// `boxes` (when given) the occluders of each, in the same order; `jitter`
+// the pixel's (pixel_jitter), for soft shadows.
 // @orig none: port lighting
 Vec3 WorldLighting::shade_point(int c, const Vec3& p, const Vec3& n, ObjId self, const LightingOptions& opt,
                                 const std::vector<std::uint32_t>& ids,
-                                const std::vector<std::vector<std::uint32_t>>* boxes, bool liquid) const {
+                                const std::vector<std::vector<std::uint32_t>>* boxes, bool liquid,
+                                float jitter) const {
     // The liquid itself is the light: its ambient stays.
     const float a = opt.ambient * (liquid ? 1.0f : liquid_dim(lights_, &ids, p));
     Vec3 light{a, a * 1.02f, a * 1.12f};
@@ -1519,10 +1684,11 @@ Vec3 WorldLighting::shade_point(int c, const Vec3& p, const Vec3& n, ObjId self,
         const float cone = spot(L, to, dist);
         if (cone <= 0) continue;
         const float f = 1 - d2 / (L.radius * L.radius);
-        const float w = ndl * f * f * cone;
-        if (opt.shadows &&
-            occluded(p, n, self, ids[k], opt.sprite_shadows, boxes ? (*boxes)[k] : per_light_[ids[k]]))
-            continue;
+        float w = ndl * f * f * cone;
+        if (opt.shadows) {
+            w *= seen_share(p, n, self, ids[k], opt.sprite_shadows, boxes ? (*boxes)[k] : per_light_[ids[k]], jitter);
+            if (w <= 0) continue;
+        }
         light = light + L.color * w;
     }
     Vec3 col = mul(lin_[c], light);
@@ -1651,6 +1817,16 @@ bool WorldLighting::shade(const World& world, const Surface8& screen, const Pale
     set_palette(palette);
     lights_ = std::move(extra);
     gather_lights(world, opt, lights_);
+    // Lights that reach nothing on the screen (the map's ceiling lights,
+    // most of them far away): out. A ball of radius r round a light shows
+    // within half r of the light's pixel (the projection stretches no
+    // direction by more than kPixelScale * sqrt 2).
+    std::erase_if(lights_, [&](const PointLight& L) {
+        const float sx = (L.pos.x - L.pos.y) * 0.25f, sy = (L.pos.x + L.pos.y) * 0.125f - L.pos.z / kLightZScale;
+        const float r = std::max(L.radius, L.halo * 3) * 0.5f;
+        return sx + r < float(view_left_) || sx - r > float(view_left_ + width_) || sy + r < float(view_top_) ||
+               sy - r > float(view_top_ + height_);
+    });
     gather_occluders(world);
     if (opt.smoke) puff_states(puff_now_);
     else puff_now_.clear();
@@ -1713,8 +1889,10 @@ void WorldLighting::shade_cpu(const Surface8& screen, const LightingOptions& opt
                 ids.push_back(l);
                 auto& list = boxes.emplace_back();
                 if (!opt.shadows) continue;
-                const Vec3 a{std::min(lo.x, L.pos.x) - 4, std::min(lo.y, L.pos.y) - 4, std::min(lo.z, L.pos.z) - 4};
-                const Vec3 b{std::max(hi.x, L.pos.x) + 4, std::max(hi.y, L.pos.y) + 4, std::max(hi.z, L.pos.z) + 4};
+                const Vec3 a{std::min(lo.x, L.pos.x - L.area_x) - 4, std::min(lo.y, L.pos.y - L.area_y) - 4,
+                             std::min(lo.z, L.pos.z) - 4};
+                const Vec3 b{std::max(hi.x, L.pos.x + L.area_x) + 4, std::max(hi.y, L.pos.y + L.area_y) + 4,
+                             std::max(hi.z, L.pos.z) + 4};
                 for (std::uint32_t bi : per_light_[l]) {
                     const Box& box = boxes_[bi];
                     if (box.hi.x < a.x || box.lo.x > b.x || box.hi.y < a.y || box.lo.y > b.y || box.hi.z < a.z ||
@@ -1762,7 +1940,7 @@ void WorldLighting::shade_cpu(const Surface8& screen, const LightingOptions& opt
                 else if (!lit) col = lin_[c] * opt.ambient;
                 else
                     col = shade_point(c, pos_[j], nrm_[j], list_[owner_[j]].item->id, opt, ids, &boxes,
-                                      liquid_[owner_[j]] != 0);
+                                      liquid_[owner_[j]] != 0, pixel_jitter(view_left_ + x, view_top_ + y));
                 if (!halos.empty())
                     col = halo_over(col, x, y, lit, lit ? pos_[j].x + pos_[j].y : 0.0f,
                                     owner_[j] >= 0 ? list_[owner_[j]].item->id : 0,
@@ -1868,17 +2046,18 @@ bool WorldLighting::shade_gpu(const Surface8& screen, const LightingOptions& opt
             else f.code[j] = static_cast<std::uint16_t>(owner_[j]);
         }
     });
-    f.lights.assign(lights_.size() * 20, 0.0f);
+    f.lights.assign(lights_.size() * 24, 0.0f);
     f.light_boxes.clear();
     for (std::size_t l = 0; l < lights_.size(); ++l) {
         const PointLight& L = lights_[l];
-        float* o = &f.lights[l * 20];
+        float* o = &f.lights[l * 24];
         o[0] = L.pos.x, o[1] = L.pos.y, o[2] = L.pos.z, o[3] = L.radius;
         o[4] = L.color.x, o[5] = L.color.y, o[6] = L.color.z, o[7] = float(L.owner);
         o[8] = float(f.light_boxes.size()), o[9] = float(per_light_[l].size()), o[10] = L.liquid ? 1.0f : 0.0f;
         o[11] = L.cos_inner;
         o[12] = L.dir.x, o[13] = L.dir.y, o[14] = L.dir.z, o[15] = L.cos_outer;
         o[16] = L.halo, o[17] = L.halo_gain, o[18] = L.dim;
+        o[20] = L.area_x, o[21] = L.area_y;
         for (std::uint32_t b : per_light_[l]) f.light_boxes.push_back(static_cast<std::int32_t>(b));
     }
     f.puffs.assign(puff_now_.size() * 12, 0.0f);

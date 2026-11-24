@@ -91,6 +91,7 @@ The original has nothing like it. This screen gathers every option the port adds
 | 3D LIGHTING / ECLAIRAGE 3D | Lights the world in 3D, with shadows (section 7d) | `lighting` |
 | VOLUMETRIC SMOKE / FUMEE 3D | With the 3D lighting: smoke of explosions and shots, steam of liquids (section 7d); on by default | `volumetricsmoke` |
 | FLASHLIGHT / LAMPE TORCHE | With the 3D lighting: the Silencer's lamp lights in front of him (section 7d); on by default, L or the controller's FLASHLIGHT action (LT) switches it in play | `flashlight` |
+| CEILING LIGHTS / PLAFONNIERS | With the 3D lighting: lamps under the rooms' ceilings light them, placed by hand room by room (section 7d); on by default | `ceilinglights` |
 | AMBIENT LIGHT / LUMIERE AMBIANTE | With the 3D lighting: how bright the scene stays where no lamp reaches, 0 to 100 % by 5 (left / right); 85 % by default | `ambientlight` |
 
 *EFFECTS / EFFETS*
@@ -442,7 +443,8 @@ The original ejects nothing. With this option every shot of a firearm throws out
 
 **Option:** 3D LIGHTING / ECLAIRAGE 3D (`lighting`), DISPLAY page, off by default. `--lighting` switches it on for one run.
 **Option:** VOLUMETRIC SMOKE / FUMEE 3D (`volumetricsmoke`, written only when off), DISPLAY page, on by default: the smoke and the liquids' steam below. Without the 3D lighting it does nothing.
-**Files:** `src/engine/world/lighting.*`, `src/platform/gl_lighting.*`, `src/game/game.cpp`, `src/platform/sdl_presenter.*`; the `lightview` tool and docs/LIGHTVIEW.md
+**Option:** CEILING LIGHTS / PLAFONNIERS (`ceilinglights`, written only when off), DISPLAY page, on by default: the ceiling lights below. Without the 3D lighting it does nothing.
+**Files:** `src/engine/world/lighting.*`, `src/engine/world/ceiling_lights.*`, `src/core/json.*`, `ceiling_lights/`, `src/platform/gl_lighting.*`, `src/game/game.cpp`, `src/platform/sdl_presenter.*`; the `lightview` tool and docs/LIGHTVIEW.md; the light plans in `tools/lights/`
 
 The original draws flat sprites under a fixed light. With this option the world is lit in 3D in true colour.
 
@@ -453,13 +455,14 @@ The original draws flat sprites under a fixed light. With this option the world 
 - Items with colour-cycled pixels (palette entries 1..14: lamps, screens, force fields, lasers) light the scene around them in their colour.
 - Lamps give light (wall and ceiling lamps, floodlights, red wall lamps and lanterns, strip lights, desk lamps; monitors and wall screens a dimmer one), stronger the brighter the ambient light so that they still show at 85 %, and glow in the air round the bulb (the floodlights the strongest, with a tight halo): a soft halo over what is behind the lamp, cut by what stands in front. A lamp shot goes out. Vending machines and drinks fridges, lit from inside, cast a cool light out of their glass onto the floor in front of them (not on the wall behind) and glow softly over it, a vending machine's light flickering with its neon; shot, they go dark. The alarm lights and ALERT signs light only during an alert, pulsing red.
 - Flashes, explosions and shots (sprites) light the surface under them.
-- Firearms flash at the muzzle: each shot of the BA-40, BA-41, RP-22, RP-32, SG-A1, AC-88 and GL-303, the player's or an enemy's, lights a warm flash at the end of the gun for a fifteenth of a second, which lights the shooter and the walls around. Where a bullet lands, the spark gives only a small light. Energy weapons and rockets need no flash: their shot glows by itself from the muzzle on.
+- Firearms flash at the muzzle: each shot of the BA-40, BA-41, RP-22, RP-32, SG-A1, AC-88 and GL-303, the player's or an enemy's, lights a warm flash at the end of the gun for a fifteenth of a second, which lights the shooter and the walls around; the shooter, the player or an enemy, casts its shadow behind it, on the floor and the walls. Where a bullet lands, the spark gives only a small light. Energy weapons and rockets need no flash: their shot glows by itself from the muzzle on.
 - The Silencer carries a lamp (FLASHLIGHT / LAMPE TORCHE option, on by default): a beam from his chest the way he faces, tipped down, that lights the floor and what stands in front of him (a cone of 40 degrees, full within 23). He never shadows it himself.
 - **L** switches the lamp on or off in play, the same setting as the option (saved); Ctrl+L stays the cheat. On the controller, the FLASHLIGHT action sends L; it is on **LT** by default. Without the 3D lighting, L does nothing, as in the original.
+- Ceiling lights (CEILING LIGHTS / PLAFONNIERS option, on by default): the original draws no ceiling, and its rooms have only the light painted in their sprites. Lamps placed by hand under each room's ceiling, a plan per mission (editable JSON next to the executable: `ceiling_lights/mapNNN.json` for the lamps, `ceiling_lights/kinds.json` for their kinds' colour, strength, reach and how much they lower the ambient light; read at start-up, a mod's own `ceiling_lights/` first; tools/lights/README.md), few and strong (some 1150 units apart, far reaching), light the floor in wide pools and the walls near them, and make crates, desks, machines and people cast long, dark shadows; round them the ambient light is much lower, so that the room is lit by its lamps. They are not drawn: the ceiling is not. Warm white in offices and quarters, cold white tubes in labs, corridors and machine rooms, orange sodium in stores and docks. Closets and recesses, the outside and the rooms that a radioactive pool already lights get none. So far: missions 1 to 15, their variant maps included.
 - The rest of the scene keeps most of its light (AMBIENT LIGHT / LUMIERE AMBIANTE option, 85 % of its light by default), so the game stays readable. Lower, the lamps stand out more; 100 does not darken the scene at all.
 
 **Shadows**
-- Item boxes cast shadows, cut by their sprites: railings, grids and bodies cast their outline. A light is never shadowed by the item that gives it; lasers, electrified floors and flat items (floors, grates, mats) cast none.
+- Item boxes cast shadows, cut by their sprites: railings, grids and bodies cast their outline; the liquids' glow, spread over their surface, casts soft ones. A light is never shadowed by the item that gives it, except a muzzle flash, whose shooter casts its shadow; lasers, electrified floors and flat items (floors, grates, mats) cast none.
 
 **Smoke** (VOLUMETRIC SMOKE option)
 - Explosions leave a dark cloud: six puffs of noise that glow orange for the first second (lit from inside by the explosion), then rise, grow and thin out over five or six seconds. It stays see-through, as much for a big blast as for a small one (the bigger, the thinner), so that what happens in it can be followed.
@@ -471,9 +474,9 @@ The original draws flat sprites under a fixed light. With this option the world 
 - It follows the game's clock: it stops with the game (menus, pause), goes on a map change. It only reads the world and uses its own numbers, never the game's random generators.
 
 **Liquids**
-- The green liquids (the pools, their strips and edges, ripples and bubbles: shapes 0x150, 0x59E, 0x227, 0x228, 0x5A2, 0x55A, 0x56D, 0x56E, 0x1D6, 0x539, 0x54C, 0x580; no TYPEFLAG bit marks them) glow a faint radioactive green, in slow patches that drift and breathe.
-- They light what stands around them (walls, rims, floors, machines, pillars, people at the edge) in green, with one light for each 1024 x 1024 cell of liquid, high over it so that it falls on the floors past the rims and reaches 1600 units; it does not light the liquid itself.
-- Around them the ambient light is lower (down to 25 % of it over most of that reach, the strongest liquid near counting, not their sum), so that a room with a pool or a canal is lit by its green glow rather than by the general light. The liquid itself and the lit points away from it keep the ambient light chosen.
+- The green liquids (the pools, their strips and edges, ripples and bubbles: shapes 0x150, 0x59E, 0x227, 0x228, 0x5A2, 0x55A, 0x56D, 0x56E, 0x1D6, 0x539, 0x54C, 0x580; no TYPEFLAG bit marks them) glow a radioactive green, in slow patches that drift and breathe.
+- They light what stands around them (walls, rims, floors, machines, pillars, people at the edge) in green, with one light for each 1024 x 1024 cell of liquid, high over it so that it falls on the floors past the rims and reaches 1600 units; it does not light the liquid itself. Its shadows are soft: the glow comes from the whole surface, so a point is lit by the share of the liquid it sees (twelve points of it, four first and the others only in the penumbra); a walkway over the acid darkens the floor under it softly instead of throwing a hard shadow far away.
+- Around them the ambient light is lower (down to 10 % of it over most of that reach, the strongest liquid near counting, not their sum), so that a room with a pool or a canal is lit by its green glow rather than by the general light. The liquid itself and the lit points away from it keep the ambient light chosen.
 - The pools give off a thin steam: wisps that rise from the surface, drift and fade out over seven to eleven seconds, faintly green. They need no memory (each comes back from the game's clock and the pool's place), so they are there as soon as a pool is in view; they go with the smoke (VOLUMETRIC SMOKE option).
 
 **What is not lit**

@@ -10,6 +10,7 @@
 #include "engine/world/actor_create.hpp"
 #include "engine/world/aim_mode.hpp"
 #include "engine/world/attack.hpp"
+#include "engine/world/ceiling_lights.hpp"
 #include "engine/world/cheats.hpp"
 #include "engine/world/auto_firer.hpp"
 #include "engine/world/gravity.hpp"
@@ -678,10 +679,19 @@ void Game::load_save_file(const std::filesystem::path& path) {
     //   enterFastArea skip them while it is: dead for good, nothing could
     //   start them again. The loop is started again (the timer from the
     //   start of its delay), once the TRIGGER locks below are released.
+    // - A floating platform (HOVER1, HOVER_EW, HOVER_NS) travels between its
+    //   waypoints in HOVER's event 0x21, endless, which sets the bit; its
+    //   enterFastArea starts that loop only when the bit is clear and QHi
+    //   bit 0x20 is clear too (0x20, set in the map: another item starts
+    //   it, through equip): mission 1's platform on the acid stopped for
+    //   good after a load
+    //   (issue #33). The loop starts again towards the waypoint in QHi's low
+    //   nibble, the one the platform was heading for.
     // Not here: FFFLOOR / FFFLOOR2 (bit 0x1000 is the floor's lasting
     // state) and ELEVAT (a ride also holds the items on the platform).
     const UsecodeFile& usecode = machine_->usecode();
     std::vector<std::pair<ObjId, std::uint16_t>> restarts;
+    std::vector<ObjId> hovers;
     world_->for_each([&](const Item& i) {
         if (!(i.flags & 0x1000) || i.parent || !usecode.has_class(i.shape)) return;
         const std::string cls = usecode.class_name(i.shape);
@@ -691,6 +701,8 @@ void Game::load_save_file(const std::filesystem::path& path) {
             restarts.emplace_back(i.id, std::uint16_t{0x20});
         } else if (cls == "ROLLB_NS" || cls == "ROLLB_EW") {
             restarts.emplace_back(i.id, std::uint16_t{0x21});
+        } else if (cls == "HOVER1" || cls == "HOVER_EW" || cls == "HOVER_NS") {
+            hovers.push_back(i.id);
         }
     });
     // Items saved while TRIGGER worked on them (its lock, status 0x1000, see
@@ -713,6 +725,30 @@ void Game::load_save_file(const std::filesystem::path& path) {
     });
     if (world_->hooks().start_event) {
         for (const auto& [id, event] : restarts) world_->hooks().start_event(id, event);
+    }
+    if (world_->hooks().call_class_event) {
+        // HOVER1_0047's spawn: HOVER fn 0x21 with the platform's id.
+        for (ObjId id : hovers) {
+            const std::uint8_t args[] = {static_cast<std::uint8_t>(id), static_cast<std::uint8_t>(id >> 8)};
+            world_->hooks().call_class_event("HOVER", 0x21, id, args);
+        }
+    }
+    // The resistance's scenery guards (REB_GAR) keep their rest frame in
+    // QLo: enterFastArea copies the current frame there, then the guard
+    // either leaves (frame 32, empty) or moves forever, 7 frames up and back
+    // down; leaveFastArea puts the rest frame back. Saved halfway through a
+    // move (issue #33, item 673 of map 40: frame 31, rest 24), the fast area
+    // rebuilt below took frame 31 for the rest frame: from then on he went
+    // up through 32 (empty) and 33..38 (no such frames), blinking out at
+    // each move. The guards saved in the fast area leave it first, as their
+    // process ends: their rest frame back, they enter it again as on arrival.
+    if (world_->hooks().start_event) {
+        std::vector<ObjId> guards;
+        world_->for_each([&](const Item& i) {
+            if (!(i.flags & kItemFastArea) || i.parent || !usecode.has_class(i.shape)) return;
+            if (usecode.class_name(i.shape) == "REB_GAR") guards.push_back(i.id);
+        });
+        for (ObjId id : guards) world_->hooks().start_event(id, 0x10);
     }
     world_->clear_fast_area();
     // The eggs' hatchers stand for the saved ones: an egg the player stands
@@ -2013,7 +2049,10 @@ bool Game::render_lit(const Surface8& screen, std::vector<std::uint32_t>& argb) 
     // Port addition: the fires of the leaking barrels' pools light the scene.
     std::vector<PointLight> extra;
     if (config_.barrel_leaks) extra = barrel_leaks_.lights(*world_);
-    return lighting_->shade(*world_, screen, palette(), lighting_options(config_), std::move(extra), argb.data());
+    const LightingOptions options = lighting_options(config_);
+    // Port addition: lamps under the rooms' ceilings (GameConfig::ceiling_lights).
+    if (config_.ceiling_lights) add_ceiling_lights(ceiling_lights(world_->current_map()), options.ambient, extra);
+    return lighting_->shade(*world_, screen, palette(), options, std::move(extra), argb.data());
 }
 
 // @orig none: port addition (Game::set_overlay_zoom)

@@ -30,6 +30,7 @@
 #include "platform/gl_lighting.hpp"
 #include "crusader_version.hpp"
 #include "engine/ui/christmas_hat.hpp"
+#include "engine/world/ceiling_lights.hpp"
 #include "engine/world/inventory.hpp"
 #include "engine/world/projectile.hpp"
 #include "game/game.hpp"
@@ -195,6 +196,27 @@ int main(int argc, char** argv) {
             }
             set_languages_dir(languages);
         }
+        // The ceiling lights (port addition, engine/world/ceiling_lights.hpp):
+        // the "ceiling_lights" folder of the mod, then the one next to the
+        // executable, else in the current folder.
+        {
+            std::vector<std::filesystem::path> dirs;
+            if (!mod.empty()) dirs.push_back(mod / "ceiling_lights");
+            if (char* base = SDL_GetBasePath()) {
+                dirs.push_back(std::filesystem::path(base) / "ceiling_lights");
+                SDL_free(base);
+            }
+            dirs.push_back("ceiling_lights");
+            set_ceiling_lights_dirs(std::move(dirs));
+        }
+        // SDL_Quit runs last, after the destructors of the window, the audio, the
+        // controller and the GPU lighting, which still call SDL (and the GL library
+        // it unloads): closing the controller after SDL_Quit crashed with
+        // sdl2-compat (SDL3) on exit (issue #23), deleting the GL objects after it
+        // crashed too (issue #28). Declared first, so destroyed last.
+        struct SdlQuitLast {
+            ~SdlQuitLast() { SDL_Quit(); }
+        } sdl_quit_last;
         Game game(data, {}, mod);
         game.set_port_version(CRUSADER_VERSION);
         if (lighting) game.config().lighting = true;
@@ -327,12 +349,6 @@ int main(int argc, char** argv) {
 
         // The options screen saves its settings, as the original does.
         game.set_config_file(data / "CRUSADER.CFG");
-        // SDL_Quit runs last, after the destructors of the window, the audio and
-        // the controller, which still call SDL: closing the controller after
-        // SDL_Quit crashed with sdl2-compat (SDL3) on exit (issue #23).
-        struct SdlQuitLast {
-            ~SdlQuitLast() { SDL_Quit(); }
-        } sdl_quit_last;
         SdlPresenter presenter(kWindowTitle, Game::kScreenWidth, Game::kScreenHeight, 2, fullscreen);
         presenter.set_gamma(gamma);
         install_real_shift();  // Windows: Shift + keypad with Num Lock on (issue #14)

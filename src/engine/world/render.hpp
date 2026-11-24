@@ -160,6 +160,11 @@ struct DisplayExtras {
 std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes, const View& view, int w, int h,
                                          RenderStats* stats = nullptr, const DisplayExtras* extras = nullptr,
                                          bool walk_all = false);
+// Port addition (lighting): the items whose sprite falls on that screen
+// widened by `margin` pixels on each side, placed as in the display list
+// (screen coordinates from `view`), unsorted.
+std::vector<DrawItem> items_around_view(const World& world, ShapeCache& shapes, const View& view, int w, int h,
+                                        int margin);
 // Same, centred on `camera` (world units).
 std::vector<DrawItem> build_display_list(const World& world, ShapeCache& shapes, const Camera& camera, int w,
                                          int h, RenderStats* stats = nullptr);
