@@ -45,6 +45,7 @@ NOTES = {
     'src/engine/ui/enhancements_screen.cpp': 'enhancements window',
     'src/engine/ui/gamepad_screen.cpp': 'controller screen',
     'src/engine/ui/load_screen.cpp': 'load and save screen',
+    'src/engine/ui/inventory_panel.cpp': '3DS bottom screen',
     'src/engine/ui/options_screen.cpp': 'options screen',
     'src/engine/ui/status_bar.cpp': 'status bar',
     'src/engine/ui/weasel_gump.cpp': "Weasel's shop, No Remorse only",
