@@ -259,6 +259,9 @@ public:
     // The item selection mode of the game view is on (item_selection.hpp):
     // there Enter uses or picks up the selected item, which U does not.
     bool selecting() const { return world_ && world_->state.selection.active; }
+    // In play, the weapon (or item) in the player's equipment `slot` made
+    // active directly (select_weapon / select_item). True when it is active.
+    bool select_equipment(bool weapon, int slot);
     // Ends the aiming mode as a non-aiming action does (aim_after_do_anim):
     // the crosshair goes and the fire state is reset. For a hold-to-aim
     // button; the original has no key for it.

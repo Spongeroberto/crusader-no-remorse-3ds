@@ -610,6 +610,12 @@ void Game::leave_aim() {
     if (world_->hooks().reset_fire) world_->hooks().reset_fire();
 }
 
+// @orig none: port-only, a tap on the 3DS touch screen
+bool Game::select_equipment(bool weapon, int slot) {
+    if (!world_ || !mouse_in_play() || world_->state.selection.active) return false;
+    return weapon ? select_weapon(*kernel_, *world_, anims_, slot) : select_item(*world_, slot);
+}
+
 // @orig none: the slot's file in the save directory
 void Game::load_save(int slot) { load_save_file(save_dir_ / ("SAVEGAME." + std::to_string(slot))); }
 

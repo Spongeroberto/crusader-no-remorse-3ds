@@ -160,48 +160,26 @@ public:
         }
     }
 
-    // A tap on the equipment (`shown`, as drawn): a weapon or item is made
-    // active with the game's own keys, next weapon (W) or previous item (I)
-    // once every other frame until it is (the game refuses a key while the
-    // player is busy, so a few more are allowed).
-    // Previous item, since going up the items never reaches the last slot.
+    // A tap on the equipment (`shown`, as drawn) makes that weapon or item
+    // active at once (Game::select_equipment), not by turning through the
+    // others with the game's keys.
     void touch(const InventoryPanel::State& shown) {
-        if (tapped_) {
-            key(tapped_->scancode, tapped_->extended, false);
-            tapped_ = nullptr;
-            return;
+        if (!shown.shown || !(hidKeysDown() & KEY_TOUCH)) return;
+        touchPosition t;
+        hidTouchRead(&t);
+        const InventoryPanel::Hit hit = InventoryPanel::hit(t.px, t.py);
+        switch (hit.target) {
+        case InventoryPanel::Target::Weapon:
+            if (shown.weapons[hit.slot - InventoryPanel::kFirstWeapon].id) game_.select_equipment(true, hit.slot);
+            break;
+        case InventoryPanel::Target::Item:
+            if (shown.items[hit.slot - InventoryPanel::kFirstItem].id) game_.select_equipment(false, hit.slot);
+            break;
+        case InventoryPanel::Target::None: break;
         }
-        if (!shown.shown) {
-            want_ = {};
-            return;
-        }
-        if (hidKeysDown() & KEY_TOUCH) {
-            touchPosition t;
-            hidTouchRead(&t);
-            const InventoryPanel::Hit hit = InventoryPanel::hit(t.px, t.py);
-            switch (hit.target) {
-            case InventoryPanel::Target::Weapon:
-                if (shown.weapons[hit.slot - InventoryPanel::kFirstWeapon].id) want_ = hit;
-                tries_ = kTries;
-                break;
-            case InventoryPanel::Target::Item:
-                if (shown.items[hit.slot - InventoryPanel::kFirstItem].id) want_ = hit;
-                tries_ = kTries;
-                break;
-            case InventoryPanel::Target::None: break;
-            }
-        }
-        const bool weapon = want_.target == InventoryPanel::Target::Weapon;
-        if (want_.target == InventoryPanel::Target::None) return;
-        if ((weapon ? shown.active_weapon : shown.active_item) == want_.slot || tries_-- <= 0) {
-            want_ = {};
-            return;
-        }
-        tap(action(weapon ? kPadNextWeapon : kPadPrevItem));
     }
 
 private:
-    static constexpr int kTries = 30;
     // How long D-pad left / right is held to roll instead of stepping aside.
     // The step goes at the release, not the press: the game drops a key
     // pressed while the player is busy (AvatarMover), so a step sent at once
@@ -281,12 +259,6 @@ private:
             aim_deg_ = std::atan2(static_cast<double>(pad.dy), static_cast<double>(pad.dx)) * 180.0 / 3.14159265358979;
         }
         game_.set_aim_stick(true, aim_deg_);
-    }
-
-    // Pressed now, released at the next touch().
-    void tap(const PadAction* a) {
-        key(a->scancode, a->extended, true, a->ascii);
-        tapped_ = a;
     }
 
     void key(std::uint8_t scancode, bool extended, bool pressed, std::uint8_t ascii = 0) {
@@ -390,9 +362,6 @@ private:
     double side_since_ = 0;
     bool side_rolled_ = false;  // the hold has rolled
     const PadAction* pulsed_ = nullptr;
-    const PadAction* tapped_ = nullptr;
-    InventoryPanel::Hit want_;
-    int tries_ = 0;
 };
 
 // The controls in menus, in the font of the movie subtitles (light, for a

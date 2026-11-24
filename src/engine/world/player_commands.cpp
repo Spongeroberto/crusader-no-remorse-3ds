@@ -99,18 +99,44 @@ void previous_weapon(World& world) {
         world.set_npc_word(kPlayer, npc::kWeapon, static_cast<std::uint16_t>(slot));
 }
 
+namespace {
+
+// The weapon in `slot` made active, the player's pose following (W's tail).
 // @orig 13E8:0C72
-void next_weapon(Kernel& kernel, World& world, const AnimDat& anims) {
-    const int current = world.npc_word(kPlayer, npc::kWeapon);
-    if (world.state.controlled_npc != kPlayer || current == 0) return;
-    const int slot = find_slot(world, current, +1, kFirstWeaponSlot, kLastWeaponSlot);
-    if (slot == 0) return;
+void set_weapon_slot(Kernel& kernel, World& world, const AnimDat& anims, int slot) {
     world.set_npc_word(kPlayer, npc::kWeapon, static_cast<std::uint16_t>(slot));
     // The pose of the new weapon (CRUSADER_1138_32a8), 0x40 for none.
     std::uint16_t pose = 0x40;
     if (kneeling(world)) pose = weapon_keeps_actions(world) ? 0x2E : 0x2F;
     else if (!idle(world)) pose = weapon_keeps_actions(world) ? 4 : 0x25;
     if (pose != 0x40 && !actor_busy(kernel, kPlayer)) set_pose(world, anims, kPlayer, pose);
+}
+
+}  // namespace
+
+// @orig 13E8:0C72
+void next_weapon(Kernel& kernel, World& world, const AnimDat& anims) {
+    const int current = world.npc_word(kPlayer, npc::kWeapon);
+    if (world.state.controlled_npc != kPlayer || current == 0) return;
+    const int slot = find_slot(world, current, +1, kFirstWeaponSlot, kLastWeaponSlot);
+    if (slot == 0) return;
+    set_weapon_slot(kernel, world, anims, slot);
+}
+
+// @orig none: port-only, a tap on the 3DS touch screen
+bool select_weapon(Kernel& kernel, World& world, const AnimDat& anims, int slot) {
+    if (!player_may_act(world) || slot < kFirstWeaponSlot || slot > kLastWeaponSlot) return false;
+    if (world.npc_word(kPlayer, npc::kWeapon) == 0 || world.npc_equip(kPlayer, slot) == 0) return false;
+    if (world.npc_word(kPlayer, npc::kWeapon) != slot) set_weapon_slot(kernel, world, anims, slot);
+    return true;
+}
+
+// @orig none: port-only, a tap on the 3DS touch screen
+bool select_item(World& world, int slot) {
+    if (!player_may_act(world) || slot < kFirstItemSlot || slot > kLastItemSlotDown) return false;
+    if (world.npc_word(kPlayer, npc::kActiveItem) == 0 || world.npc_equip(kPlayer, slot) == 0) return false;
+    world.set_npc_word(kPlayer, npc::kActiveItem, static_cast<std::uint16_t>(slot));
+    return true;
 }
 
 // @orig 13E8:0D5F

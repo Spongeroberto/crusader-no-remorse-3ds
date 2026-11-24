@@ -74,6 +74,12 @@ bool player_may_act(const World& world);
 
 void previous_weapon(World& world);
 void next_weapon(Kernel& kernel, World& world, const AnimDat& anims);
+// Port-only (a tap on the 3DS touch screen): the weapon or item in `slot`
+// made active at once, as W / O would after enough presses (W's pose
+// included). Only when the player may act, already has an active one (as
+// the keys need) and `slot` holds something. True when it is active.
+bool select_weapon(Kernel& kernel, World& world, const AnimDat& anims, int slot);
+bool select_item(World& world, int slot);
 void previous_item(World& world);
 void next_item(World& world);
 void use_active_item(World& world);
