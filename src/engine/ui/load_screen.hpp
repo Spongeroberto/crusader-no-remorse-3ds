@@ -42,7 +42,14 @@
 // the umlauts from the player's layout.
 // Not reproduced: the mouse cursor hidden while a name is edited.
 //
-// Port addition, for consoles without a keyboard (the PortMaster build, see
+// Port addition, for small screens (the 3DS, see the constructor's
+// `save_slots`): fewer save slots than eleven. The background is then cut to
+// fit the rows (its bottom half drawn higher, so the frame closes under the
+// last row), the "MISSION:" label of the rows painted over by "SLOT 1"..,
+// and the load screen puts the autosave (SAVEGAME.12) first, "AUTOSAVE".
+// Saves in the slots left out stay on disk, unseen.
+//
+// Port addition, for consoles without a keyboard (the PortMaster and 3DS builds, see
 // set_auto_name): choosing a slot to save proposes a name made by the caller
 // (the date and time, dated_name) instead of the slot's; Enter (the pad's A)
 // gives it, Escape (B) leaves the slot as it was, and a keyboard plugged in
@@ -59,6 +66,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace crusader {
 
@@ -84,8 +92,10 @@ public:
     enum class Mode { kSave = 0, kLoad = 1 };
     static constexpr std::size_t kMaxNameLength = 25;
 
-    // `selected` is DS:0098, kept by the caller.
-    LoadScreen(ShapeCache& gumps, const FontSet& fonts, const Names& names, int& selected, Mode mode = Mode::kLoad);
+    // `selected` is DS:0098, kept by the caller. `save_slots` below
+    // kSaveSlots gives the small-screen layout (see above).
+    LoadScreen(ShapeCache& gumps, const FontSet& fonts, const Names& names, int& selected, Mode mode = Mode::kLoad,
+               int save_slots = kSaveSlots);
 
     void draw(Surface8& screen) const;
     void key(std::uint16_t code);
@@ -105,10 +115,17 @@ public:
     // Saving: the name being edited (editing()), then the name given.
     bool editing() const { return editing_; }
     const std::string& name() const { return name_; }
+    // Where slot i (SAVEGAME.<i + 1>) is drawn, when shown.
     const Rect& slot_rect(int i) const { return slots_[i]; }
+    // Port addition: the rectangle the screen draws in (its background, a
+    // 417 x 348 area, less with fewer save slots), for platforms that show it
+    // larger (Game::set_overlay_zoom).
+    Rect area() const;
 
 private:
-    int visible_slots() const { return mode_ == Mode::kLoad ? kSlots : kSaveSlots; }
+    int visible_slots() const { return static_cast<int>(rows_.size()); }
+    int row_of(int slot) const;
+    bool compact() const { return save_slots_ < kSaveSlots; }
     void choose(int i);
     void edit_key(std::uint16_t code);
 
@@ -117,6 +134,9 @@ private:
     const Names* names_;
     int* selected_;
     std::array<Rect, kSlots> slots_{};
+    int save_slots_ = kSaveSlots;
+    std::vector<int> rows_;  // the slot shown on each row, from the top
+    int panel_height_ = 0;
     std::optional<int> result_;
     Mode mode_;
     bool editing_ = false;

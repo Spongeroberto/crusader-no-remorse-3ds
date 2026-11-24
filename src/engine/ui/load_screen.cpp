@@ -17,6 +17,13 @@ constexpr int kLeft = 111, kTop = 66;
 constexpr int kQuarterW = 208, kQuarterH = 174;
 constexpr int kSlotX = 183, kSlotY = 109, kSlotStep = 27;
 constexpr std::size_t kNameEntry = 9;
+// Compact layout (fewer save slots): the frame under the last row, the
+// label column painted over (from the frame's inner edge to the slots) and
+// the gap between a label and its slot.
+constexpr int kPanelMargin = 18;
+constexpr int kLabelLeft = kLeft + 6, kLabelTop = kSlotY - 4, kLabelGap = 6;
+constexpr int kLabelFont = 13;
+constexpr std::uint8_t kLabelColour = 13;  // MISC.PAL
 constexpr std::size_t kNameSize = 32;
 
 }  // namespace
@@ -42,16 +49,44 @@ LoadScreen::Names LoadScreen::read_names(const std::filesystem::path& savegame_d
 }
 
 // @orig 1008:0088
-LoadScreen::LoadScreen(ShapeCache& gumps, const FontSet& fonts, const Names& names, int& selected, Mode mode)
-    : gumps_(&gumps), fonts_(&fonts), names_(&names), selected_(&selected), mode_(mode) {
-    *selected_ = std::clamp(*selected_, 0, visible_slots() - 1);
+LoadScreen::LoadScreen(ShapeCache& gumps, const FontSet& fonts, const Names& names, int& selected, Mode mode,
+                       int save_slots)
+    : gumps_(&gumps), fonts_(&fonts), names_(&names), selected_(&selected), mode_(mode),
+      save_slots_(std::clamp(save_slots, 1, kSaveSlots)) {
+    // The rows, by slot: the original's eleven, then the autosave on the
+    // load screen; with fewer, the autosave first.
+    const bool autosave = mode_ == Mode::kLoad;
+    if (autosave && compact()) rows_.push_back(kSlots - 1);
+    for (int i = 0; i < save_slots_; ++i) rows_.push_back(i);
+    if (autosave && !compact()) rows_.push_back(kSlots - 1);
+    if (!compact()) *selected_ = std::clamp(*selected_, 0, visible_slots() - 1);
+    else if (row_of(*selected_) < 0) *selected_ = rows_.front();
     const Shape* s = gumps_->get(kSlotShape);
     const int w = s && !s->frames().empty() ? s->frames()[0].width : 1;
     const int h = s && !s->frames().empty() ? s->frames()[0].height : 1;
     for (int i = 0; i < kSlots; ++i) {
-        const int y = kSlotY + kSlotStep * i;
+        const int row = row_of(i) >= 0 ? row_of(i) : i;
+        const int y = kSlotY + kSlotStep * row;
         slots_[i] = {kSlotX, y, kSlotX + w - 1, y + h - 1};
     }
+    // Compact: the frame 18 pixels under the load screen's last row, about as
+    // under the save screen's eleventh (the save screen, a row shorter, the
+    // same size).
+    panel_height_ = 2 * kQuarterH;
+    if (compact()) {
+        const int last = kSlotY + kSlotStep * save_slots_ + h;
+        panel_height_ = std::min(panel_height_, last + kPanelMargin - kTop);
+    }
+}
+
+int LoadScreen::row_of(int slot) const {
+    const auto it = std::find(rows_.begin(), rows_.end(), slot);
+    return it == rows_.end() ? -1 : static_cast<int>(it - rows_.begin());
+}
+
+// @orig none: port addition (Game::set_overlay_zoom)
+LoadScreen::Rect LoadScreen::area() const {
+    return {kLeft, kTop, kLeft + 2 * kQuarterW - 1, kTop + panel_height_ - 1};
 }
 
 // @orig 1008:05A6 1008:0C9A
@@ -59,14 +94,41 @@ void LoadScreen::draw(Surface8& screen) const {
     screen.clear(0);
     for (int q = 0; q < 4; ++q) {
         const auto shape = static_cast<std::uint16_t>(64 + 5 * static_cast<int>(mode_) + q);
+        // Compact: the bottom half drawn higher, over the top one.
+        const int y = q < 2 ? kTop : kTop + panel_height_ - kQuarterH;
         if (const Shape* s = gumps_->get(shape); s && !s->frames().empty()) {
-            s->frames()[0].draw(screen, kLeft + (q & 1) * kQuarterW, kTop + (q >> 1) * kQuarterH);
+            s->frames()[0].draw(screen, kLeft + (q & 1) * kQuarterW, y);
         }
     }
-    const Shape* slot = gumps_->get(kSlotShape);
-    for (int i = 0; i < visible_slots(); ++i) {
+    if (compact()) {
+        // The rows' "MISSION:" painted over, then numbered.
+        for (int y = kLabelTop; y < kTop + panel_height_ - kPanelMargin; ++y) {
+            std::fill(screen.row(y) + kLabelLeft, screen.row(y) + kSlotX - 1, std::uint8_t{0});
+        }
+        // In the small font, in the red of "MISSION:" (one colour, so its
+        // pixels are recoloured), right-aligned against the slot.
+        TextWriter writer(*fonts_, kLabelFont);
+        for (int row = 0; row < visible_slots(); ++row) {
+            const int slot = rows_[static_cast<std::size_t>(row)];
+            const std::string label =
+                slot == kSlots - 1 ? tr("AUTOSAVE") : std::string(tr("SLOT")) + ' ' + std::to_string(slot + 1);
+            const Rect& r = slots_[slot];
+            const auto size = writer.measure(label);
+            Surface8 text(size.width + 2, size.height + 2, 0);
+            writer.print(text, 0, 0, label);
+            const int x0 = std::max(kLabelLeft, kSlotX - kLabelGap - size.width);
+            const int y0 = (r.y0 + r.y1 + 1 - size.height) / 2;
+            for (int y = 0; y < text.height; ++y) {
+                for (int x = 0; x < text.width && x0 + x < kSlotX - 1; ++x) {
+                    if (text.row(y)[x]) screen.row(y0 + y)[x0 + x] = kLabelColour;
+                }
+            }
+        }
+    }
+    const Shape* slot_shape = gumps_->get(kSlotShape);
+    for (const int i : rows_) {
         const Rect& r = slots_[i];
-        if (slot && !slot->frames().empty()) slot->frames()[0].draw(screen, r.x0, r.y0);
+        if (slot_shape && !slot_shape->frames().empty()) slot_shape->frames()[0].draw(screen, r.x0, r.y0);
         if (i == *selected_) outline(screen, r.x0, r.y0, r.x1, r.y1, kSelectedColour);
         const bool edited = editing_ && i == *selected_;
         TextWriter(*fonts_, kFont).print(screen, r.x0 + 4, r.y0 + 12, edited ? name_ + '_' : (*names_)[i]);
@@ -80,21 +142,21 @@ void LoadScreen::key(std::uint16_t code) {
         edit_key(code);
         return;
     }
-    const int sel = *selected_;
+    const int sel = row_of(*selected_);
     switch (code) {
     case gump_key::kEscape:
         result_ = 0;
         break;
     case gump_key::kUp:
     case '8':
-        if (sel != 0) *selected_ = sel - 1;
+        if (sel != 0) *selected_ = rows_[static_cast<std::size_t>(sel - 1)];
         break;
     case gump_key::kDown:
     case '2':
-        if (sel < visible_slots() - 1) *selected_ = sel + 1;
+        if (sel < visible_slots() - 1) *selected_ = rows_[static_cast<std::size_t>(sel + 1)];
         break;
     case gump_key::kEnter:
-        choose(sel);
+        choose(*selected_);
         break;
     default:
         break;
@@ -104,7 +166,7 @@ void LoadScreen::key(std::uint16_t code) {
 // @orig 1008:0AEA 1008:0B63
 void LoadScreen::mouse_down(int x, int y) {
     if (result_ || editing_) return;
-    for (int i = 0; i < visible_slots(); ++i) {
+    for (const int i : rows_) {
         if (slots_[i].contains(x, y)) {
             *selected_ = i;
             choose(i);

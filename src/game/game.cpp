@@ -151,8 +151,8 @@ private:
 class LoadGump : public ModalGump {
 public:
     LoadGump(ShapeCache& gumps, const FontSet& fonts, const LoadScreen::Names& names, int& selected,
-             LoadScreen::Mode mode = LoadScreen::Mode::kLoad)
-        : s_(gumps, fonts, names, selected, mode) {}
+             LoadScreen::Mode mode, int save_slots)
+        : s_(gumps, fonts, names, selected, mode, save_slots) {}
     void draw(Surface8& screen) const override { s_.draw(screen); }
     void key(std::uint16_t code) override { s_.key(code); }
     void mouse_down(int x, int y) override { s_.mouse_down(x, y); }
@@ -161,6 +161,9 @@ public:
     int slot() const { return s_.slot(); }
     const std::string& name() const { return s_.name(); }
     void set_auto_name(std::function<std::string()> auto_name) { s_.set_auto_name(std::move(auto_name)); }
+    std::optional<Area> area() const override { return zoom_rect(s_.area()); }
+    std::optional<Area> focus() const override { return zoom_rect(s_.slot_rect(s_.slot())); }
+    static Area zoom_rect(const LoadScreen::Rect& r) { return {r.x0, r.y0, r.x1 - r.x0 + 1, r.y1 - r.y0 + 1}; }
 
 private:
     LoadScreen s_;
@@ -1477,7 +1480,7 @@ void Game::open_menu(bool no_game) {
                             std::string(tr("GAME DATA")) + " " +
                                 (data_version_.empty() ? std::string(tr("UNKNOWN")) : "V" + data_version_) + " " +
                                 (data_language_.empty() ? std::string(tr("UNKNOWN LANGUAGE")) : data_language_),
-                            auto_save_name_function(),
+                            auto_save_name_function(), save_slots_,
                             christmas_ && (!audio_ || audio_->music.christmas_allowed()), menu_quit_shown_},
         menu_shared_, no_game);
     auto p = std::make_unique<ModalProcess>();
@@ -1644,7 +1647,8 @@ bool Game::function_key(std::uint16_t code) {
         world_->state.screen_palette = menu_palette_;
         cursor_.push(MouseCursor::kMenuArrow);
         cursor_.show();
-        auto load = std::make_unique<LoadGump>(gumps_, fonts_, save_names_, menu_shared_.selected_slot);
+        auto load = std::make_unique<LoadGump>(gumps_, fonts_, save_names_, menu_shared_.selected_slot,
+                                               LoadScreen::Mode::kLoad, save_slots_);
         open_screen(std::move(load), [this](const ModalGump& screen) {
             if (screen.result()) pending_load_ = static_cast<const LoadGump&>(screen).slot() + 1;
             cursor_.reset(MouseCursor::kArrow);
@@ -1665,7 +1669,7 @@ bool Game::function_key(std::uint16_t code) {
         cursor_.push(MouseCursor::kMenuArrow);
         cursor_.show();
         auto save = std::make_unique<LoadGump>(gumps_, fonts_, save_names_, menu_shared_.selected_slot,
-                                               LoadScreen::Mode::kSave);
+                                               LoadScreen::Mode::kSave, save_slots_);
         save->set_auto_name(auto_save_name_function());
         open_screen(std::move(save), [this](const ModalGump& screen) {
             cursor_.reset(MouseCursor::kArrow);
@@ -2013,18 +2017,29 @@ bool Game::render_lit(const Surface8& screen, std::vector<std::uint32_t>& argb) 
 }
 
 // @orig none: port addition (Game::set_overlay_zoom)
-// The UI screen's area of full_screen_ (just drawn) copied pixel for pixel
+// `area` (UI coordinates) of full_screen_ (just drawn) copied pixel for pixel
 // into the stored pixels of `screen`, centred where its halved picture is,
-// moved inside if it would cross an edge. The stored picture is then no
-// longer the full one halved: it is only for showing.
-void Game::zoom_overlay(Surface8& screen) const {
-    const auto area = screen_->area();
-    if (!area) return;
-    const int x0 = std::max(area->x + ui_x_, 0), y0 = std::max(area->y + ui_y_, 0);
-    const int w = std::min(area->x + ui_x_ + area->w, full_screen_.width) - x0;
-    const int h = std::min(area->y + ui_y_ + area->h, full_screen_.height) - y0;
+// moved inside if it would cross an edge. An area larger than the stored
+// pixels is cut to them round its middle, and vertically round `focus` (the
+// selection), so the selection stays in view as it moves. The stored picture
+// is then no longer the full one halved: it is only for showing.
+void Game::zoom_overlay(Surface8& screen, const ModalGump::Area& area,
+                        const std::optional<ModalGump::Area>& focus) const {
     const int sw = screen.stored_width(), sh = screen.stored_height();
-    if (w <= 0 || h <= 0 || w > sw || h > sh) return;
+    int x0 = std::max(area.x + ui_x_, 0), y0 = std::max(area.y + ui_y_, 0);
+    int w = std::min(area.x + ui_x_ + area.w, full_screen_.width) - x0;
+    int h = std::min(area.y + ui_y_ + area.h, full_screen_.height) - y0;
+    if (w <= 0 || h <= 0) return;
+    if (w > sw) {
+        x0 += (w - sw) / 2;
+        w = sw;
+    }
+    if (h > sh) {
+        if (!focus) return;
+        const int middle = focus->y + ui_y_ + focus->h / 2;
+        y0 = std::clamp(middle - sh / 2, y0, y0 + h - sh);
+        h = sh;
+    }
     const int to_x = std::clamp((x0 + w / 2) / 2 - w / 2, 0, sw - w);
     const int to_y = std::clamp((y0 + h / 2) / 2 - h / 2, 0, sh - h);
     for (int y = 0; y < h; ++y) std::copy_n(full_screen_.row(y0 + y) + x0, w, screen.row(to_y + y) + to_x);
@@ -2104,7 +2119,18 @@ void Game::render(Surface8& screen, RenderStats* stats) {
         }
         render(full_screen_, stats);
         keep_every_other_pixel(full_screen_, screen);
-        if (overlay_zoom_ && !movie_ && !menu_ && screen_ && screen_->over_view()) zoom_overlay(screen);
+        if (overlay_zoom_ && !movie_) {
+            if (menu_ && menu_->load_screen()) {
+                // The menu's load and save screens, cut round the selected slot.
+                const LoadScreen& load = *menu_->load_screen();
+                const auto rect = [](const LoadScreen::Rect& r) {
+                    return ModalGump::Area{r.x0, r.y0, r.x1 - r.x0 + 1, r.y1 - r.y0 + 1};
+                };
+                zoom_overlay(screen, rect(load.area()), rect(load.slot_rect(load.slot())));
+            } else if (!menu_ && screen_) {
+                if (const auto area = screen_->area()) zoom_overlay(screen, *area, screen_->focus());
+            }
+        }
         return;
     }
     if (lighting_) lighting_->forget();

@@ -61,6 +61,8 @@ CLICK: ASSIGN A BUTTON   DEL: CLEAR = CLICK: ASSIGN A BUTTON   DEL: CLEAR
 
 # --- load and save screen (src/engine/ui/load_screen.cpp)
 SAVED GAME = SAVED GAME
+SLOT = SLOT
+AUTOSAVE = AUTOSAVE
 
 # --- Weasel's shop, No Remorse only (src/engine/ui/weasel_gump.cpp)
 Are you sure you\nwant to buy this? = Are you sure you\nwant to buy this?

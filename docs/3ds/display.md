@@ -39,7 +39,13 @@ detail unevenly, which looked worse than the smaller, even picture. Things are s
   each reports its rectangle (`ModalGump::area`), which is copied pixel for pixel into
   the top-screen picture, centred where its halved version was. They all fit (the
   computer is 252×221). Weasel's shop (211×438) does not, and stays at half size, as
-  do the menus. `e2e/half_render_tests.cpp` checks the zoomed computer.
+  do the menus. The load and save screens (417×348, 2026-11-25) do not fit either:
+  the 3DS has six save slots instead of eleven (`Game::set_save_slots`), so the screens
+  are 417×240, shown at full size with 8 pixels cut at each side. The rows are labelled
+  SLOT 1..6, and the load screen lists the autosave first. Saving proposes the date and
+  time as the name (`Game::set_auto_save_names`); saves in slots 7 to 11 stay on the
+  card, unseen.
+  `e2e/half_render_tests.cpp` checks the zoomed computer and load and save screens.
 - **Pre-scaled assets** (shapes averaged when the CIA is built) remain an option for a
   smoother picture at the same speed, at the cost of exact testing.
 

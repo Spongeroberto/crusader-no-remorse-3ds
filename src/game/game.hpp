@@ -370,6 +370,9 @@ public:
     // by the PortMaster launcher): the save screens propose the date and time
     // as the name (LoadScreen::set_auto_name), confirmed with the pad's A.
     void set_auto_save_names(bool on) { auto_save_names_ = on; }
+    // Port addition, for small screens: the load and save screens show this
+    // many save slots (LoadScreen's compact layout below eleven).
+    void set_save_slots(int slots) { save_slots_ = slots; }
     // Port addition: the date is 24 to 31 December (is_christmas), set by the
     // program from the clock: the main menu's Silencer wears a Christmas hat
     // until Ctrl+M turns the Christmas mode off (christmas_hat.hpp).
@@ -438,7 +441,7 @@ private:
     // (a movie's background), under a modal screen or during a movie, the
     // view keeps its size: a screen of another size gets its centre.
     void render_view(Surface8& screen, RenderStats* stats = nullptr, bool keep_view = false);
-    void zoom_overlay(Surface8& screen) const;
+    void zoom_overlay(Surface8& screen, const ModalGump::Area& area, const std::optional<ModalGump::Area>& focus) const;
     template <typename Draw>
     void draw_window(Surface8& screen, int x0, int y0, Draw&& draw);
     template <typename Draw>
@@ -546,6 +549,7 @@ private:
     // back after it (13E0:0CD8).
     bool weasel_movie_ = false;
     bool auto_save_names_ = false;     // set_auto_save_names
+    int save_slots_ = LoadScreen::kSaveSlots;  // set_save_slots
     bool christmas_ = false;           // set_christmas
     bool weasel_intro_played_ = false;  // DS:5ECF
     bool restoring_fast_area_ = false;  // load_save_file rebuilds the saved fast area

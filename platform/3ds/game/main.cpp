@@ -574,7 +574,13 @@ int main() {
         game.start_up();
         game.set_cursor_drawn(false);  // no pointer: menus are played with keys
         game.set_status_bar_drawn(false);  // the bottom screen shows it
-        game.set_overlay_zoom(true);  // computers, keypads and dialogs at full size, readable
+        game.set_overlay_zoom(true);  // computers, keypads, dialogs and the save screens at full size, readable
+        // No keyboard: choosing a save slot proposes the date and time as its
+        // name, which A gives (B leaves the slot as it was).
+        game.set_auto_save_names(true);
+        // Six save slots (and the autosave): the load and save screens then
+        // fit the top screen at full size, with no scrolling.
+        game.set_save_slots(6);
         // Destroyed before the game: its thread reads the game's mixer.
         std::unique_ptr<ctr::Audio> audio;
         if (game.audio()) {

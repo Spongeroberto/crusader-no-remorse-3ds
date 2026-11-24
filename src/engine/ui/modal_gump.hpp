@@ -39,6 +39,9 @@ public:
         int x = 0, y = 0, w = 0, h = 0;
     };
     virtual std::optional<Area> area() const { return std::nullopt; }
+    // Port addition: for an area() larger than such a platform's screen, the
+    // part of it to keep in view (the selection); the rest is cut off.
+    virtual std::optional<Area> focus() const { return std::nullopt; }
     // The palette it writes to the DAC as it goes, if any.
     virtual const Palette* palette() const { return nullptr; }
 };

@@ -12,10 +12,12 @@
 
 #include "core/flex.hpp"
 #include "core/png_writer.hpp"
+#include "engine/ui/load_screen.hpp"
 #include "engine/ui/main_menu.hpp"
 #include "engine/world/world.hpp"
 #include "game/game.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -173,8 +175,73 @@ void difficulty_outline(const std::filesystem::path& data, const std::filesystem
     }
 }
 
+void zoomed_save_screen(Pair& p, const std::filesystem::path& png_dir);
+
+// The 3DS layout of the load and save screens (six save slots): with
+// overlay zoom, the whole screen (417 x 240) fits the 400 x 240 top screen
+// at full size, cut by 8 pixels each side, whatever slot is selected.
+int zoomed_load_screen_wrong(const LoadScreen& load, const Surface8& full, const Surface8& half) {
+    const LoadScreen::Rect area = load.area();
+    const int sw = half.stored_width(), sh = half.stored_height();
+    const int ox = (kWidth - 640) / 2, oy = (kHeight - 480) / 2;
+    check(area.y1 - area.y0 + 1 == sh, "six slots and the autosave fit 240 rows");
+    const int x0 = ox + area.x0 + (area.x1 - area.x0 + 1 - sw) / 2, y0 = oy + area.y0;
+    int wrong = 0;
+    for (int y = 0; y < sh; ++y) {
+        for (int x = 0; x < sw; ++x) wrong += half.row(y)[x] != full.row(y0 + y)[x0 + x];
+    }
+    return wrong;
+}
+
+void write_shown(const Surface8& half, const Palette& palette, const std::filesystem::path& png) {
+    if (png.parent_path().empty()) return;
+    Surface8 picture(half.stored_width(), half.stored_height());
+    picture.pixels = half.pixels;
+    write_png(png, picture, palette);
+}
+
+// The menu's load screen: the autosave first, then slots 1 to 6.
+void zoomed_menu_load_screen(const std::filesystem::path& data, const std::filesystem::path& png_dir) {
+    Game g(data, std::filesystem::temp_directory_path() / "crusader-half-render-load");
+    g.set_overlay_zoom(true);
+    g.set_save_slots(6);
+    Surface8 half = Surface8::half(kWidth, kHeight);
+    const auto press = [&](std::uint16_t scan, bool ext, std::uint16_t ch = 0) {
+        g.key(scan, ext, true, 0, ch);
+        g.update(kFrameUs);
+        g.key(scan, ext, false, 0);
+        g.update(kFrameUs);
+    };
+    g.open_menu();
+    g.update(kFrameUs);
+    while (g.menu() && g.menu()->selected() != MainMenu::kLoad) press(0x50, true);  // down to "load game"
+    press(0x1C, false, 0x0D);
+    const LoadScreen* load = g.menu() ? g.menu()->load_screen() : nullptr;
+    check(load != nullptr, "the menu's load screen opens");
+    if (!load) return;
+    check(load->slot_rect(LoadScreen::kSlots - 1).y0 < load->slot_rect(0).y0, "the autosave above slot 1");
+    press(0x48, true);  // up: the autosave
+    check(load->slot() == LoadScreen::kSlots - 1, "the first row is the autosave");
+    Surface8 full(kWidth, kHeight);
+    full.set_shown_halved(true);
+    for (int row = 0; row < 7; ++row) {
+        if (row > 0) press(0x50, true);  // down
+        g.render(full);
+        g.render(half);
+        const int wrong = zoomed_load_screen_wrong(*load, full, half);
+        if (wrong) std::printf("zoomed menu load screen, row %d: %d pixels wrong\n", row, wrong);
+        check(wrong == 0, "the menu's load screen shown at full size, unmoved");
+        if (row == 0 && !png_dir.empty()) write_shown(half, g.palette(), png_dir / "load_screen_menu.png");
+    }
+    check(load->slot() == 5, "the last row is slot 6");
+    press(0x50, true);
+    check(load->slot() == 5, "no row under slot 6");
+    std::printf("zoomed menu load screen checked\n");
+}
+
 void run(const std::filesystem::path& data, const std::filesystem::path& png_dir) {
     difficulty_outline(data, png_dir);
+    zoomed_menu_load_screen(data, png_dir);
     Pair p(data);
     // Off by default; on here so that their drawing is checked too.
     p.both([](Game& g) {
@@ -225,7 +292,61 @@ void run(const std::filesystem::path& data, const std::filesystem::path& png_dir
     std::printf("frames %d (%d before play, %d in play), differing %d\n", p.frame, intro, p.in_play, p.differing);
     check(p.differing == 0, "the half-resolution screen is the full one with every other pixel kept");
     check(p.full_game.machine().faults().empty() && p.half_game.machine().faults().empty(), "no usecode faults");
+    zoomed_save_screen(p, png_dir);
     zoomed_computer(p, png_dir);
+}
+
+// The save screen (F9) with overlay zoom, six slots and auto save names, as
+// on the 3DS: shown whole at full size; choosing a slot proposes the dated name.
+void zoomed_save_screen(Pair& p, const std::filesystem::path& png_dir) {
+    // Back in play first: a movie or message at the end of the run is skipped.
+    for (int i = 0; i < 600 && !(p.full_game.mouse_in_play() && p.half_game.mouse_in_play()); ++i) {
+        if (i % 30 == 15) p.both([](Game& g) { g.key(0x01, false, true, 0, 0x1B); });
+        if (i % 30 == 16) p.both([](Game& g) { g.key(0x01, false, false, 0); });
+        p.step("back to play");
+    }
+    check(p.full_game.mouse_in_play() && p.half_game.mouse_in_play(), "both games back in play for the save screen");
+    p.both([](Game& g) { g.set_save_slots(6); });
+    p.half_game.set_auto_save_names(true);
+    const auto press = [&](std::uint16_t scan, bool ext, std::uint16_t ch = 0) {
+        p.both([&](Game& g) {
+            g.key(scan, ext, true, 0, ch);
+            g.update(kFrameUs);
+            g.key(scan, ext, false, 0);
+            g.update(kFrameUs);
+        });
+    };
+    // The mission's start may hold the player still: F9 needs him free.
+    p.both([](Game& g) { g.world().state.avatar_in_stasis = g.world().state.cru_stasis = false; });
+    press(0x43, false);  // F9
+    for (int i = 0; i < 60; ++i) p.both([](Game& g) { g.update(kFrameUs); });
+    check(p.half_game.screen() && p.full_game.screen(), "F9 opens the save screen");
+    // Before: the whole screen halved.
+    p.half_game.set_overlay_zoom(false);
+    p.half_game.render(p.half);
+    write_shown(p.half, p.half_game.palette(), png_dir.empty() ? "" : png_dir / "save_screen_halved.png");
+    p.half_game.set_overlay_zoom(true);
+    // The save screen is a LoadScreen of the same layout as the menu's.
+    ShapeCache& gumps = p.half_game.gumps();
+    LoadScreen::Names names;
+    int selected = 0;
+    const LoadScreen layout(gumps, p.half_game.fonts(), names, selected, LoadScreen::Mode::kSave, 6);
+    for (int slot = 0; slot < 6; ++slot) {
+        if (slot > 0) press(0x50, true);  // down
+        p.full_game.render(p.full);
+        p.half_game.render(p.half);
+        const int wrong = zoomed_load_screen_wrong(layout, p.full, p.half);
+        if (wrong) std::printf("zoomed save screen, slot %d: %d pixels wrong\n", slot, wrong);
+        check(wrong == 0, "the save screen shown at full size, unmoved");
+        if (slot == 0) write_shown(p.half, p.half_game.palette(), png_dir.empty() ? "" : png_dir / "save_screen.png");
+    }
+    press(0x1C, false, 0x0D);  // Enter: the dated name proposed
+    p.half_game.render(p.half);
+    write_shown(p.half, p.half_game.palette(), png_dir.empty() ? "" : png_dir / "save_screen_auto_name.png");
+    press(0x01, false, 0x1B);  // Escape: the slot left as it was
+    press(0x01, false, 0x1B);  // and the screen closed
+    p.both([](Game& g) { g.set_save_slots(LoadScreen::kSaveSlots); });
+    std::printf("zoomed save screen checked\n");
 }
 
 }  // namespace

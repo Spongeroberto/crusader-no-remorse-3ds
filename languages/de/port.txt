@@ -58,6 +58,8 @@ CLICK: ASSIGN A BUTTON   DEL: CLEAR = KLICK: KNOPF ZUWEISEN   ENTF: LOESCHEN
 
 # --- load and save screen (src/engine/ui/load_screen.cpp)
 SAVED GAME = SPIELSTAND
+SLOT = SPIEL
+AUTOSAVE = AUTOSAVE
 
 # --- Weasel's shop, No Remorse only (src/engine/ui/weasel_gump.cpp)
 Are you sure you\nwant to buy this? = Sind Sie sicher,\ndaß Sie das kaufen\nwollen?

@@ -100,6 +100,9 @@ public:
         // Port addition: the save screen's proposed name (LoadScreen::set_auto_name),
         // empty for the original's.
         std::function<std::string()> auto_save_name;
+        // Port addition: the load and save screens' save slots (LoadScreen,
+        // fewer for small screens).
+        int save_slots = LoadScreen::kSaveSlots;
         // Port addition: the Christmas hat on the background.
         bool christmas_hat = false;
         // Port addition: false leaves the "quit" button out.
