@@ -1959,6 +1959,7 @@ void Game::draw_window(Surface8& screen, int x0, int y0, Draw&& draw) {
         return;
     }
     if (window_.width != kScreenWidth) window_ = Surface8(kScreenWidth, kScreenHeight);
+    window_.set_shown_halved(screen.shown_halved());
     copy_block(screen, x0, y0, window_, 0, 0, kScreenWidth, kScreenHeight);
     draw(window_);
     copy_block(window_, 0, 0, screen, x0, y0, kScreenWidth, kScreenHeight);
@@ -2099,6 +2100,7 @@ void Game::render(Surface8& screen, RenderStats* stats) {
     if (screen.half_resolution() && (movie_ || modal())) {
         if (full_screen_.width != screen.width || full_screen_.height != screen.height) {
             full_screen_ = Surface8(screen.width, screen.height);
+            full_screen_.set_shown_halved(true);  // outlines drawn thick enough to survive
         }
         render(full_screen_, stats);
         keep_every_other_pixel(full_screen_, screen);

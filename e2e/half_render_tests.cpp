@@ -12,6 +12,7 @@
 
 #include "core/flex.hpp"
 #include "core/png_writer.hpp"
+#include "engine/ui/main_menu.hpp"
 #include "engine/world/world.hpp"
 #include "game/game.hpp"
 
@@ -48,7 +49,9 @@ struct Pair {
     explicit Pair(const std::filesystem::path& data)
         : data(data),
           full_game(data, std::filesystem::temp_directory_path() / "crusader-half-render-full"),
-          half_game(data, std::filesystem::temp_directory_path() / "crusader-half-render-half") {}
+          half_game(data, std::filesystem::temp_directory_path() / "crusader-half-render-half") {
+        full.set_shown_halved(true);  // halved below: its menus' outlines drawn as the half game's
+    }
 
     template <class Fn>
     void both(Fn&& fn) {
@@ -127,7 +130,51 @@ void zoomed_computer(Pair& p, const std::filesystem::path& png_dir) {
     check(wrong == 0, "the zoomed computer is the full picture's, the rest halved");
 }
 
+// The difficulty screen on a half-resolution screen: the outline of the
+// selected level shows all four sides whatever the parity of its edges
+// (level 2's top is on an odd line, the left and right edges on odd columns).
+void difficulty_outline(const std::filesystem::path& data, const std::filesystem::path& png_dir) {
+    Game g(data, std::filesystem::temp_directory_path() / "crusader-half-render-difficulty");
+    Surface8 half = Surface8::half(kWidth, kHeight);
+    const auto press = [&](std::uint16_t scan, bool ext, std::uint16_t ch = 0) {
+        g.key(scan, ext, true, 0, ch);
+        g.update(kFrameUs);
+        g.key(scan, ext, false, 0);
+        g.update(kFrameUs);
+    };
+    g.open_menu();
+    g.update(kFrameUs);
+    press(0x1C, false, 0x0D);  // new game: the difficulty screen
+    const DifficultyScreen* ds = g.menu() ? g.menu()->difficulty_screen() : nullptr;
+    check(ds != nullptr, "the difficulty screen opens");
+    if (!ds) return;
+    press(0x48, true);  // up: level 2
+    press(0x48, true);  // up: level 1
+    const int ox = (kWidth - 640) / 2, oy = (kHeight - 480) / 2;
+    const auto kept = [&](int x, int y) { return half.row((oy + y) / 2)[(ox + x) / 2]; };
+    for (int level = 1; level <= DifficultyScreen::kLevels; ++level) {
+        check(ds->selected() == level, "the level selected");
+        g.render(half);
+        const DifficultyScreen::Rect& r = ds->button(level);
+        const int mx = (r.x0 + r.x1) / 2 & ~1, my = (r.y0 + r.y1) / 2 & ~1;
+        const auto even = [](int v, int inward) { return v & 1 ? v + inward : v; };
+        const std::uint8_t c = DifficultyScreen::kOutlineColour;
+        const bool top = kept(mx, even(r.y0, 1)) == c, bottom = kept(mx, even(r.y1, -1)) == c;
+        const bool left = kept(even(r.x0, 1), my) == c, right = kept(even(r.x1, -1), my) == c;
+        std::printf("difficulty level %d outlined at half resolution: top %d bottom %d left %d right %d\n", level, top,
+                    bottom, left, right);
+        check(top && bottom && left && right, "all four sides of the selected level's outline shown");
+        if (level == 2 && !png_dir.empty()) {
+            Surface8 shown(half.stored_width(), half.stored_height());
+            shown.pixels = half.pixels;
+            write_png(png_dir / "difficulty_halved.png", shown, g.palette());
+        }
+        if (level < DifficultyScreen::kLevels) press(0x50, true);  // down
+    }
+}
+
 void run(const std::filesystem::path& data, const std::filesystem::path& png_dir) {
+    difficulty_outline(data, png_dir);
     Pair p(data);
     // Off by default; on here so that their drawing is checked too.
     p.both([](Game& g) {

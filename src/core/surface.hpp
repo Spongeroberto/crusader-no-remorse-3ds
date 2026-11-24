@@ -42,6 +42,7 @@ struct Surface8 {
         v.width = w;
         v.height = h;
         v.half_ = s.half_;
+        v.shown_halved_ = s.shown_halved_;
         v.origin_ = s.half_ ? s.row(y / 2) + x / 2 : s.row(y) + x;
         v.stride_ = s.stride();
         if (s.depth_base_) {
@@ -105,6 +106,12 @@ struct Surface8 {
     }
 
     bool half_resolution() const { return half_; }
+    // Port addition: a full-size picture that will be shown with every other
+    // pixel of every other line kept (keep_every_other_pixel, the menus on
+    // the 3DS). outline() draws its edges two pixels thick into it, so that
+    // they all survive the halving.
+    void set_shown_halved(bool halved) { shown_halved_ = halved; }
+    bool shown_halved() const { return shown_halved_; }
     int stored_width() const { return half_ ? width / 2 : width; }
     int stored_height() const { return half_ ? height / 2 : height; }
 
@@ -141,23 +148,32 @@ private:
     int depth_z_ = 0;
     int depth_height_ = 0;
     bool half_ = false;
+    bool shown_halved_ = false;
 };
 
 // One-pixel outline of the rectangle (x0, y0)-(x1, y1), corners included,
 // clipped to the surface (vport_draw_rect, 1280:06D9).
+// Port: on a surface shown halved (Surface8::set_shown_halved), each edge is
+// doubled inwards, so that it lands on a kept row or column whatever its
+// parity (the selected level of the difficulty screen on the 3DS showed only
+// one of its sides).
 // @orig 1280:06D9
 inline void outline(Surface8& s, int x0, int y0, int x1, int y1, std::uint8_t c) {
     auto put = [&](int x, int y) {
         if (std::uint8_t* p = s.at(x, y)) *p = c;
     };
-    for (int x = x0; x <= x1; ++x) {
-        put(x, y0);
-        put(x, y1);
-    }
-    for (int y = y0; y <= y1; ++y) {
-        put(x0, y);
-        put(x1, y);
-    }
+    auto edges = [&](int ax0, int ay0, int ax1, int ay1) {
+        for (int x = ax0; x <= ax1; ++x) {
+            put(x, ay0);
+            put(x, ay1);
+        }
+        for (int y = ay0; y <= ay1; ++y) {
+            put(ax0, y);
+            put(ax1, y);
+        }
+    };
+    edges(x0, y0, x1, y1);
+    if (s.shown_halved() && x1 - x0 >= 2 && y1 - y0 >= 2) edges(x0 + 1, y0 + 1, x1 - 1, y1 - 1);
 }
 
 // The rectangle (x0, y0)-(x1, y1) filled, corners included, clipped
