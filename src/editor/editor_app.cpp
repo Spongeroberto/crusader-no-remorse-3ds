@@ -99,6 +99,7 @@ EditorApp::EditorApp(SDL_Renderer* renderer, EditorOptions options)
             }
         }
     }
+    if (options_.center_x >= 0) center_on(options_.center_x, options_.center_y, options_.center_z);
 }
 
 EditorApp::~EditorApp() {
@@ -190,6 +191,10 @@ void EditorApp::save() {
         }
         commit_map();
         project_->save();
+        if (manifest_dirty_) {
+            manifest().write(options_.mod);
+            manifest_dirty_ = false;
+        }
         message(std::string(tr("Enregistré dans ", "Saved to ")) + options_.mod.string());
     } catch (const std::exception& e) {
         message(std::string(tr("Échec de l'enregistrement : ", "Save failed: ")) + e.what());
@@ -323,6 +328,47 @@ void EditorApp::new_empty_map() {
     message(std::string(tr("Nouvelle carte ", "New map ")) + std::to_string(slot) +
             tr(" : sol de la mission 1 (glob ", ": floor of mission 1 (glob ") + std::to_string(floor) +
             tr(") et œuf de départ 0x1E.", ") and start egg 0x1E."));
+}
+
+void EditorApp::generate_level() {
+    commit_map();
+    const std::size_t slot = project_->free_map();
+    if (slot == 0) {
+        message(tr("Plus d'emplacement de carte libre.", "No free map slot left."));
+        return;
+    }
+    if (!generator_data_) generator_data_ = std::make_unique<gen::GameData>(gen::GameData::load(project_->data()));
+    gen::Options o;
+    o.seed = static_cast<std::uint32_t>(generate_seed_);
+    o.biome = generate_biome_;
+    o.rooms = generate_rooms_;
+    o.locks = generate_locks_;
+    o.storeys = generate_storeys_;
+    o.guards = generate_guards_ ? -1 : 0;
+    // Key cards stay with the player from level to level: each generated
+    // map of the mod numbers its own.
+    o.first_card = 1 + (3 * static_cast<int>(manifest().levels.size())) % 30;
+    o.map = static_cast<int>(slot);
+    o.next_map = static_cast<int>(slot);  // the exit leads back to the start
+    const gen::Result result = gen::generate(generator_data_->biomes, o);
+    const std::string problem = gen::check_solvable(result);
+    if (!problem.empty() || result.level.items.empty()) {
+        message(std::string(tr("Génération impossible : ", "Generation failed: ")) + problem);
+        return;
+    }
+    project_->store_map(slot, result.level);
+    // The seed goes to the mod's NOLIMIT.JSON at the next save.
+    manifest().set(gen::manifest_level(o, result, generator_data_->biomes));
+    manifest_dirty_ = true;
+    maps_changed();
+    open_map(static_cast<int>(slot));
+    message(std::string(tr("Niveau généré sur la carte ", "Level generated on map ")) + std::to_string(slot) + " (" +
+            (result.notes.empty() ? std::string() : result.notes.front()) + ")");
+}
+
+gen::Manifest& EditorApp::manifest() {
+    if (!manifest_) manifest_ = gen::Manifest::read(project_->mod()).value_or(gen::Manifest{});
+    return *manifest_;
 }
 
 void EditorApp::copy_map_to_free_slot() {
@@ -1887,6 +1933,10 @@ void EditorApp::main_menu() {
             open_map_choice_ = map_;
         }
         if (ImGui::MenuItem(tr("Nouvelle carte", "New map"))) new_empty_map();
+        if (ImGui::MenuItem(tr("Générer un niveau (Crusader: No Limit)...", "Generate a level (Crusader: No Limit)..."))) {
+            want_generate_ = true;
+            generate_seed_ = static_cast<int>(SDL_GetTicks() % 100000) + 1;
+        }
         if (ImGui::MenuItem(tr("Copier cette carte vers un emplacement libre", "Copy this map to a free slot"))) {
             copy_map_to_free_slot();
         }
@@ -1924,6 +1974,13 @@ void EditorApp::left_panel() {
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
     ImGui::Text("%s %d  (%zu %s)", tr("Carte", "Map"), map_, level_.record_count(), tr("enregistrements", "records"));
+    if (const gen::ManifestLevel* seed = manifest().find(map_)) {
+        ImGui::TextColored(ImVec4(0.5f, 0.8f, 1, 1), "No Limit : %s %u", tr("graine", "seed"), seed->seed);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s\n%s %d", seed->biome_name.c_str(), tr("sortie vers la carte", "exit to map"),
+                              seed->next_map);
+        }
+    }
     ImGui::SetNextItemWidth(-1);
     ImGui::InputTextWithHint("##mod", tr("dossier du mod", "mod folder"), &mod_path_text_);
     if (ImGui::BeginItemTooltip()) {
@@ -3071,6 +3128,46 @@ void EditorApp::modal_popups() {
         ImGui::EndChild();
         if (ImGui::Button(tr("Ouvrir", "Open"))) {
             open_map(open_map_choice_);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(tr("Annuler", "Cancel"))) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    if (want_generate_) {
+        ImGui::OpenPopup("Crusader: No Limit###generate_level");
+        want_generate_ = false;
+    }
+    if (ImGui::BeginPopupModal("Crusader: No Limit###generate_level", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!generator_data_) generator_data_ = std::make_unique<gen::GameData>(gen::GameData::load(project_->data()));
+        ImGui::TextUnformatted(tr("Un niveau procédural sur une carte libre : salles, couloirs, portes, verrous et\n"
+                                  "leurs clés, ascenseurs entre deux étages, gardes, départ et téléporteur de sortie\n"
+                                  "(qui ramène au départ).",
+                                  "A procedural level on a free map: rooms, corridors, doors, locks and their keys,\n"
+                                  "lifts between two storeys, guards, start and exit teleporter (back to the start)."));
+        ImGui::TextDisabled("%s", tr("La graine est notée dans NOLIMIT.JSON du mod à l'enregistrement.",
+                                     "The seed is recorded in the mod's NOLIMIT.JSON when saving."));
+        ImGui::InputInt(tr("Graine", "Seed"), &generate_seed_);
+        if (generate_seed_ < 0) generate_seed_ = 0;
+        const auto& biomes = generator_data_->biomes;
+        const std::string current = generate_biome_ < 0 || generate_biome_ >= static_cast<int>(biomes.size())
+                                        ? std::string(tr("au hasard", "random"))
+                                        : biomes[static_cast<std::size_t>(generate_biome_)].name();
+        if (ImGui::BeginCombo(tr("Biome", "Biome"), current.c_str())) {
+            if (ImGui::Selectable(tr("au hasard", "random"), generate_biome_ < 0)) generate_biome_ = -1;
+            for (std::size_t i = 0; i < biomes.size(); ++i) {
+                if (ImGui::Selectable(biomes[i].name().c_str(), generate_biome_ == static_cast<int>(i))) {
+                    generate_biome_ = static_cast<int>(i);
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SliderInt(tr("Salles (0 : au hasard)", "Rooms (0: random)"), &generate_rooms_, 0, 16);
+        ImGui::SliderInt(tr("Verrous (-1 : au hasard)", "Locks (-1: random)"), &generate_locks_, -1, 4);
+        ImGui::SliderInt(tr("Étages (-1 : au hasard)", "Storeys (-1: random)"), &generate_storeys_, -1, 2);
+        ImGui::Checkbox(tr("Gardes", "Guards"), &generate_guards_);
+        if (ImGui::Button(tr("Générer", "Generate"))) {
+            generate_level();
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();

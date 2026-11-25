@@ -1,6 +1,8 @@
 // Level editor model: FIXED.DAT records, containers, globs, egg parameters
 // (no game data).
 
+#include "editor/generator/generator.hpp"
+#include "editor/generator/manifest.hpp"
 #include "editor/item_semantics.hpp"
 #include "editor/level.hpp"
 #include "editor/level_tools.hpp"
@@ -8,8 +10,10 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <vector>
 
 using namespace crusader;
@@ -314,12 +318,330 @@ void check_level_tools() {
 
 }  // namespace
 
+// Locks of a generated level: each one's key is reached before it, the
+// solver opens them in the way's order, switches and panels stand within
+// TRIGGER's range of their barrier (3200 units), card numbers are apart
+// from the links of the automatic doors, and each item links what it should.
+void check_locks(const crusader::editor::gen::Result& r) {
+    using namespace crusader::editor::gen;
+    std::vector<int> order;
+    check(check_solvable(r, &order).empty() && order.size() == r.locks.size(), "solver opens every lock");
+    std::set<int> numbers;
+    for (std::size_t k = 0; k < r.locks.size(); ++k) {
+        const Lock& lock = r.locks[k];
+        check(lock.key_room != lock.room && r.links[static_cast<std::size_t>(lock.link)].lock == static_cast<int>(k),
+              "lock and its passage");
+        check(numbers.insert(lock.number).second, "lock numbers differ");
+        const bool in_passage = lock.kind == LockKind::kCardDoor || lock.kind == LockKind::kKeypadDoor;
+        if (in_passage) {
+            check(std::abs(lock.reader.x - lock.barrier.x) <= 160 && std::abs(lock.reader.y - lock.barrier.y) <= 160,
+                  "reader or keypad beside its door");
+        }
+        if (lock.kind == LockKind::kCardDoor) {
+            check(lock.number >= 1 && lock.number <= 31, "card number");
+        } else if (lock.kind == LockKind::kKeypadDoor) {
+            check(lock.number >= 32, "keypad link above the card numbers");
+            check(std::abs(lock.key.x - lock.code_box.x) <= 3200 && std::abs(lock.key.y - lock.code_box.y) <= 3200,
+                  "monitor within range of its VALUEBOX");
+            check(lock.message == 10 || lock.message == 18 || lock.message == 19, "a code message");
+            int boxes = 0, monitors = 0;
+            for (const LevelItem& i : r.level.items) {
+                if (i.shape == 0x251 && i.quality_low() == lock.number) {
+                    ++boxes;
+                    check(i.npc_number == 0 && (i.map_number & 3) == 0, "code drawn when the map loads");
+                }
+                if (i.shape == 0x102 && i.quality == (lock.message << 8 | lock.number) && i.map_number == 0) ++monitors;
+            }
+            check(boxes == 1 && monitors == 1, "one VALUEBOX and one monitor of the link");
+        } else {
+            check(lock.number >= 32, "switch links above the card numbers");
+            check(std::abs(lock.key.x - lock.barrier.x) <= 3200 && std::abs(lock.key.y - lock.barrier.y) <= 3200,
+                  "switch within TRIGGER's range");
+        }
+        int barriers = 0, keys = 0;
+        for (const LevelItem& i : r.level.items) {
+            if (i.shape == lock.barrier_shape && i.x == lock.barrier.x && i.y == lock.barrier.y) {
+                ++barriers;
+                check(i.quality_low() == lock.number, "barrier's link");
+            }
+            const bool key_item = i.shape == lock.key_shape && i.x == lock.key.x && i.y == lock.key.y;
+            const bool user = in_passage
+                                  ? i.shape == lock.reader_shape && i.x == lock.reader.x && i.y == lock.reader.y
+                                  : key_item;
+            if (key_item) ++keys;
+            if (user) {
+                check(trigger_target(i) == lock.barrier_shape && (i.map_number & 0x1F) == 7 &&
+                          i.quality_low() == lock.number,
+                      "the key acts on its barrier");
+            }
+            if (key_item && lock.kind == LockKind::kCardDoor) check(i.quality == lock.number, "card's number");
+        }
+        check(barriers == 1 && keys == 1, "one barrier, one key");
+    }
+}
+
+// Storeys and lifts of a generated level: rooms on z 0 or 96, the start
+// below and the exit above on two storeys, a lift on each passage between
+// storeys (and only there), its corridor two tiles long at least, and its
+// items: the platform at the bottom, its pad, a call box at each end with
+// the 0x4B1 relay that makes the box's second state call too.
+void check_lifts(const crusader::editor::gen::Result& r) {
+    using namespace crusader::editor::gen;
+    for (const Room& room : r.rooms) check(room.z == 0 || room.z == kStorey, "rooms on a storey");
+    if (r.storeys == 2) {
+        check(r.rooms[r.start_room].z == 0 && r.rooms[r.exit_room].z == kStorey, "the level climbs to its exit");
+        check(!r.lifts.empty(), "lifts between storeys");
+    } else {
+        check(r.lifts.empty(), "no lift on one storey");
+    }
+    for (std::size_t li = 0; li < r.links.size(); ++li) {
+        const Link& l = r.links[li];
+        const bool between = r.rooms[l.a].z != r.rooms[l.b].z;
+        check(between == (l.lift >= 0), "a lift on each passage between storeys");
+        if (l.lift < 0) continue;
+        const Lift& lift = r.lifts[static_cast<std::size_t>(l.lift)];
+        check(lift.link == static_cast<int>(li) && r.rooms[lift.lower_room].z == 0 &&
+                  r.rooms[lift.upper_room].z == kStorey,
+              "lift rooms");
+        const Room& a = r.rooms[l.a];
+        const Room& b = r.rooms[l.b];
+        const std::int32_t length = a.slot_y == b.slot_y ? std::max(a.x0, b.x0) - std::min(a.x1, b.x1)
+                                                         : std::max(a.y0, b.y0) - std::min(a.y1, b.y1);
+        check(length >= 2 * kBlock, "a lift corridor has two tiles");
+        check(lift.x1 - lift.x0 == 128 && lift.y1 - lift.y0 == 128 && lift.platform.z == 1, "platform footprint");
+        check(std::none_of(r.locks.begin(), r.locks.end(), [&](const Lock& k) { return k.number == lift.number; }) &&
+                  std::none_of(r.links.begin(), r.links.end(),
+                               [&](const Link& k) { return k.door_a == lift.number || k.door_b == lift.number; }),
+              "lift link apart from the others");
+        int platforms = 0, pads = 0, boxes = 0, relays = 0;
+        for (const LevelItem& i : r.level.items) {
+            if (i.quality_low() != lift.number) continue;
+            const bool calls = i.npc_number == 0x2F && (i.map_number & 0xF7) == 0x26;
+            if (i.shape == 0x12F && i.x == lift.platform.x && i.y == lift.platform.y && i.z == 1) ++platforms;
+            if (i.shape == 0x4CD && calls && i.map_number == 0x26 && i.z == 9) ++pads;
+            if (i.shape == lift.box_shape && calls && i.map_number == 0x26) ++boxes;
+            if (i.shape == 0x4B1 && calls && i.map_number == 0x2E) {
+                const bool near = (std::abs(i.x - lift.bottom_box.x) <= 160 && std::abs(i.y - lift.bottom_box.y) <= 160) ||
+                                  (std::abs(i.x - lift.top_box.x) <= 160 && std::abs(i.y - lift.top_box.y) <= 160);
+                check(near, "relay beside its box");
+                ++relays;
+            }
+        }
+        check(platforms == 1 && pads == 1 && boxes == 2 && relays == 2, "lift items");
+        check(lift.bottom_box.z < kStorey && lift.top_box.z > kStorey, "a call box at each end");
+    }
+}
+
+// Guards of a generated level: none in the start room, each inside its room
+// on its storey, away from the exit pad, a MONSTER pair of its own link
+// (place frame 0 appearing on approach, kind frame 1 of its NPC type).
+void check_guards(const crusader::editor::gen::Result& r) {
+    using namespace crusader::editor;
+    using namespace crusader::editor::gen;
+    std::set<int> links;
+    for (const Guard& g : r.guards) {
+        const Room& room = r.rooms[static_cast<std::size_t>(g.room)];
+        check(g.room != r.start_room, "no guard in the start room");
+        check(g.place.x - 47 > room.x0 + kUnit && g.place.x < room.x1 - kUnit && g.place.y - 47 > room.y0 + kUnit &&
+                  g.place.y < room.y1 - kUnit && g.place.z == room.z,
+              "guard inside its room");
+        check(std::abs(g.place.x - r.exit.x) >= 112 || std::abs(g.place.y - r.exit.y) >= 112 ||
+                  g.place.z != r.exit.z,
+              "guard off the exit pad");
+        check(g.min_difficulty >= 1 && g.min_difficulty <= 3 && g.direction >= 0 && g.direction < 8, "guard settings");
+        check(links.insert(g.link).second, "a link per guard");
+        const LevelItem* place = nullptr;
+        const LevelItem* kind = nullptr;
+        for (const LevelItem& i : r.level.items) {
+            if (i.shape != kShapeMonster || i.quality_low() != g.link) continue;
+            (i.frame == 0 ? place : kind) = &i;
+        }
+        check(place && kind, "guard pair");
+        if (!place || !kind) continue;
+        const MonsterPair m = read_monster_pair(*place, *kind);
+        check(m.npc_type == g.npc_type && m.on_enter && m.min_difficulty == g.min_difficulty &&
+                  m.direction == g.direction && m.activity[0] == 8 && m.activity[1] == 5 && m.activity[2] == 5,
+              "guard pair settings");
+        check(std::none_of(r.links.begin(), r.links.end(),
+                           [&](const Link& l) { return l.door_a == g.link || l.door_b == g.link; }) &&
+                  std::none_of(r.locks.begin(), r.locks.end(), [&](const Lock& k) { return k.number == g.link; }),
+              "guard link apart");
+    }
+}
+
+// The procedural generator on a made-up biome (docs/GENERATEUR.md).
+void check_generator() {
+    using namespace crusader::editor::gen;
+    Biome biome;
+    biome.floor = {0x100, 0};
+    biome.floor_variants = {{0x100, 0}, {0x100, 1}};
+    for (int side = 0; side < 2; ++side) {
+        for (int axis = 0; axis < 2; ++axis) {
+            for (int len = 0; len < 5; ++len) {
+                biome.walls[side][axis][len] = {static_cast<std::uint16_t>(0x200 + axis * 8 + len),
+                                                static_cast<std::uint8_t>(side * 2)};
+            }
+        }
+    }
+    // Wall runs: longest pieces first.
+    const auto run = biome.wall_run(kFront, kAlongY, 30);
+    check(run.size() == 4 && run[0].shape == 0x20C && run[3].shape == 0x209 && run[0].frame == 2, "wall run 30");
+    check(biome.can_build(kBack, kAlongX, 1) && biome.can_build(kBack, kAlongX, 0), "post, empty run");
+    Biome no_post = biome;
+    no_post.walls[kBack][kAlongX][0] = {};
+    check(!no_post.can_build(kBack, kAlongX, 3) && no_post.can_build(kBack, kAlongX, 6), "runs without posts");
+
+    const std::vector<Biome> biomes{biome};
+    std::size_t locks_seen = 0, lifts_seen = 0, guards_seen = 0;
+    int two_storeys = 0, harder = 0;
+    int kinds[4] = {0, 0, 0, 0};
+    for (std::uint32_t seed = 1; seed <= 60; ++seed) {
+        Options o;
+        o.seed = seed;
+        o.map = 100;
+        o.next_map = 101;
+        const Result r = generate(biomes, o);
+        check(check_solvable(r).empty(), "generated level solvable");
+        check(r.rooms.size() >= 6 && r.rooms.size() <= 10 && r.links.size() + 1 >= r.rooms.size(), "rooms and links");
+        check(r.exit_room != r.start_room && r.rooms[r.exit_room].depth >= 1, "exit away from the start");
+        // Same seed, same level.
+        check(generate(biomes, o).level.serialize() == r.level.serialize(), "generation is deterministic");
+        // Rooms apart from each other, on whole floor tiles.
+        for (std::size_t i = 0; i < r.rooms.size(); ++i) {
+            const Room& a = r.rooms[i];
+            check((a.x1 - a.x0) % kBlock == 0 && (a.y1 - a.y0) % kBlock == 0 && a.x1 - a.x0 >= 512, "room tiles");
+            for (std::size_t j = i + 1; j < r.rooms.size(); ++j) {
+                const Room& b = r.rooms[j];
+                check(a.x1 <= b.x0 || b.x1 <= a.x0 || a.y1 <= b.y0 || b.y1 <= a.y0, "rooms do not overlap");
+            }
+        }
+        int arrivals = 0, departures = 0, doors = 0, door_eggs = 0;
+        for (const LevelItem& i : r.level.items) {
+            check(i.x > 0 && i.y > 0 && i.x < kMapSize && i.y < kMapSize, "items on the map");
+            if (i.shape == kShapeTeleportEgg && i.frame == 1 && i.quality == kStartEgg) ++arrivals;
+            if (i.shape == kShapeTeleportEgg && i.frame == 0 && i.map_number == 101 && i.quality_low() == kStartEgg) {
+                ++departures;
+            }
+            const bool lock_door = std::any_of(r.locks.begin(), r.locks.end(),
+                                               [&](const Lock& l) { return l.number == i.quality_low(); });
+            if ((i.shape == 0x0A9 || i.shape == 0x046) && !lock_door) ++doors;
+            if (i.shape == kShapeTriggerEgg && i.quality == 0x0A && i.npc_number == 0x44) ++door_eggs;
+        }
+        check(arrivals == 1 && departures == 1, "one start, one exit");
+        check(doors == static_cast<int>(2 * r.links.size() - r.locks.size()) && door_eggs == doors,
+              "an automatic door and its egg per corridor end, but at locked doorways");
+        check_locks(r);
+        check_lifts(r);
+        check_guards(r);
+        guards_seen += r.guards.size();
+        for (const Guard& g : r.guards) harder += g.min_difficulty > 1;
+        locks_seen += r.locks.size();
+        lifts_seen += r.lifts.size();
+        if (r.storeys == 2) ++two_storeys;
+        for (const Lock& lock : r.locks) ++kinds[static_cast<int>(lock.kind)];
+    }
+    check(locks_seen >= 60 && kinds[0] > 5 && kinds[1] > 5 && kinds[2] > 5 && kinds[3] > 5, "locks of every kind");
+    check(two_storeys >= 30 && two_storeys < 60 && lifts_seen >= static_cast<std::size_t>(two_storeys),
+          "levels on two storeys");
+    check(guards_seen >= 60 * 5 && harder >= 60, "guards in the levels, some from higher difficulties");
+    {
+        Options o;
+        o.seed = 3;
+        o.guards = 0;
+        const Result none = generate(biomes, o);
+        check(none.guards.empty() && std::none_of(none.level.items.begin(), none.level.items.end(),
+                                                  [](const LevelItem& i) { return i.shape == kShapeMonster; }),
+              "no guards asked for");
+        o.guards = -1;
+        const Result some = generate(biomes, o);
+        Level without = some.level;
+        std::erase_if(without.items, [](const LevelItem& i) { return i.shape == kShapeMonster; });
+        check(without.serialize() == none.level.serialize(), "guards added to the same level");
+    }
+    // Storeys asked for.
+    for (std::uint32_t seed = 1; seed <= 10; ++seed) {
+        Options o;
+        o.seed = seed;
+        o.storeys = 1;
+        const Result one = generate(biomes, o);
+        check(one.storeys == 1 && one.lifts.empty(), "one storey asked for");
+        o.storeys = 2;
+        const Result two_up = generate(biomes, o);
+        check(two_up.storeys == 2 && !two_up.lifts.empty() && check_solvable(two_up).empty(), "two storeys asked for");
+        check_lifts(two_up);
+    }
+    // Locks asked for: none, or as many as the way to the exit allows.
+    {
+        Options o;
+        o.seed = 5;
+        o.locks = 0;
+        check(generate(biomes, o).locks.empty(), "no lock asked for");
+        o.locks = 9;
+        const Result r = generate(biomes, o);
+        check(!r.locks.empty() && check_solvable(r).empty(), "many locks asked for");
+    }
+    // The solver finds a key left behind its own lock.
+    {
+        Options o;
+        o.seed = 11;
+        o.locks = 1;
+        Result r = generate(biomes, o);
+        check(r.locks.size() == 1, "one lock");
+        if (r.locks.size() == 1) {
+            r.locks[0].key_room = r.locks[0].room;
+            check(!check_solvable(r).empty(), "a key behind its lock is found");
+        }
+    }
+    // NOLIMIT.JSON: the seeds written, read back, the same map replaced; the
+    // options read back give the same level.
+    {
+        const auto dir = std::filesystem::temp_directory_path() / "crusader_editor_tests_nolimit";
+        std::filesystem::remove_all(dir);
+        Options o;
+        o.seed = 4242;
+        o.rooms = 7;
+        o.map = 120;
+        o.next_map = 121;
+        const Result r = generate(biomes, o);
+        Manifest m;
+        m.set(manifest_level(o, r, biomes));
+        ManifestLevel other = manifest_level(o, r, biomes);
+        other.map = 121;
+        other.seed = 7;
+        other.biome_name = "a \"quoted\" name";
+        m.set(other);
+        other.seed = 8;
+        m.set(other);
+        m.write(dir);
+        const auto back = Manifest::read(dir);
+        check(back && back->version == kGeneratorVersion && back->levels.size() == 2, "manifest read back");
+        if (back && back->levels.size() == 2) {
+            const ManifestLevel& a = back->levels[0];
+            check(a.map == 120 && a.seed == 4242 && a.rooms == 7 && a.biome == -1 && a.next_map == 121 &&
+                      a.room_count == 7 && a.biome_name == biome.name(),
+                  "manifest level");
+            check(back->find(121) && back->find(121)->seed == 8 && back->find(121)->biome_name == "a \"quoted\" name",
+                  "manifest: a map's level replaced, names escaped");
+            check(generate(biomes, a.options()).level.serialize() == r.level.serialize(), "seed regenerates the level");
+        }
+        check(!Manifest::read(dir / "none"), "no manifest");
+        std::filesystem::remove_all(dir);
+    }
+
+    Options o;
+    o.biome = 3;  // out of range: drawn
+    o.rooms = 2;
+    const Result two = generate(biomes, o);
+    check(two.rooms.size() == 2 && check_solvable(two).empty(), "two rooms");
+}
+
 int main() {
     check_records();
     check_globs();
     check_semantics();
     check_level_tools();
     check_project_files();
+    check_generator();
     std::printf(failures ? "%d failure(s)\n" : "all checks passed\n", failures);
     return failures ? 1 : 0;
 }

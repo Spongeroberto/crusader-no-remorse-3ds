@@ -1,0 +1,31 @@
+{
+  "format": 1,
+  "news": [
+    {
+      "date": "2026-11-25",
+      "title": {
+        "en": "Crusader: No Limit",
+        "fr": "Crusader : No Limit",
+        "de": "Crusader: No Limit"
+      },
+      "body": {
+        "en": "ALPHA, incomplete and unstable. A new mode generates a mission from a random seed, built from the designers' own rooms: arrival, contact, key room, card door, lifts, guards, extraction. This is only a test: if the results are not satisfying, the feature will disappear. Try it with the CRUSADER / NO LIMIT button of the main menu, and all feedback is welcome.",
+        "fr": "ALPHA, incomplet et instable. Un nouveau mode génère une mission à partir d'une graine aléatoire, construite avec les salles des concepteurs : arrivée, contact, salle de la clé, porte à carte, ascenseurs, gardes, extraction. Ce n'est qu'un test : si les résultats ne sont pas satisfaisants, la fonctionnalité disparaîtra. À essayer avec le bouton CRUSADER / NO LIMIT du menu principal, tous les retours sont les bienvenus.",
+        "de": "ALPHA, unvollständig und instabil. Ein neuer Modus erzeugt aus einem Zufallswert eine Mission, gebaut aus den Räumen der Entwickler: Ankunft, Kontakt, Schlüsselraum, Kartentür, Aufzüge, Wachen, Evakuierung. Das ist nur ein Test: Sind die Ergebnisse nicht zufriedenstellend, verschwindet die Funktion wieder. Probiere ihn mit der Taste CRUSADER / NO LIMIT im Hauptmenü aus; jedes Feedback ist willkommen."
+      }
+    },
+    {
+      "date": "2026-11-25",
+      "title": {
+        "en": "News and update notice",
+        "fr": "Nouveautés et avis de mise à jour",
+        "de": "Neuigkeiten und Update-Hinweis"
+      },
+      "body": {
+        "en": "The main menu now tells when a new version of the port is out, and the news of the port show up here. The enhancements window (game page) turns this on or off.",
+        "fr": "Le menu principal signale désormais la sortie d'une nouvelle version du portage, et les nouveautés du portage s'affichent ici. La fenêtre des améliorations (page jeu) l'active ou le désactive.",
+        "de": "Das Hauptmenü meldet jetzt, wenn eine neue Version der Portierung erscheint, und die Neuigkeiten der Portierung erscheinen hier. Das Verbesserungsfenster (Seite Spiel) schaltet das ein oder aus."
+      }
+    }
+  ]
+}

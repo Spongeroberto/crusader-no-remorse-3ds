@@ -7,6 +7,7 @@
 #include "core/typeflags.hpp"
 #include "core/xform.hpp"
 #include "core/dtable.hpp"
+#include "editor/generator/campaign.hpp"
 #include "editor/item_semantics.hpp"
 #include "editor/level.hpp"
 #include "editor/level_tools.hpp"
@@ -36,6 +37,7 @@ struct EditorOptions {
     int map = 1;
     std::filesystem::path game_exe;  // crusader(.exe), next to the editor
     int select_shape = -1;           // selects the first item of this shape at start
+    int center_x = -1, center_y = -1, center_z = 0;  // centres the view there at start (--center)
     bool new_map = false;            // starts with Map > New map (then saves)
     std::filesystem::path prefabs = "prefabs";  // the prefabs folder (Prefabs tab)
 };
@@ -85,6 +87,8 @@ private:
     void test_in_game();
     void new_empty_map();
     void copy_map_to_free_slot();
+    // Map > Generate a level: a procedural level on a free map (docs/GENERATEUR.md).
+    void generate_level();
 
     // --- Undo.
     void push_undo();
@@ -302,6 +306,13 @@ private:
 
     // Popups.
     bool want_open_map_ = false;
+    bool want_generate_ = false;
+    int generate_seed_ = 1, generate_biome_ = -1, generate_rooms_ = 0, generate_locks_ = -1, generate_storeys_ = -1;
+    bool generate_guards_ = true;
+    std::unique_ptr<gen::GameData> generator_data_;  // learnt from the data on first use
+    std::optional<gen::Manifest> manifest_;          // the mod's NOLIMIT.JSON, read on first use
+    bool manifest_dirty_ = false;
+    gen::Manifest& manifest();
     bool want_quit_confirm_ = false;
     int open_map_choice_ = 1;
     std::string mod_path_text_;

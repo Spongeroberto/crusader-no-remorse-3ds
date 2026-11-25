@@ -62,8 +62,15 @@ add_library(crusader_core
   src/core/png_writer.cpp
   src/core/avi_movie.cpp
   src/core/movie_subtitles.cpp
-  src/core/json.cpp)
+  src/core/json.cpp
+  src/core/news.cpp
+  src/core/sha256.cpp
+  src/core/archive.cpp
+  src/core/self_update.cpp)
 target_include_directories(crusader_core PUBLIC src)
+# The self-update (self_update.cpp) downloads on a thread of its own: -pthread on older glibc.
+find_package(Threads REQUIRED)
+target_link_libraries(crusader_core PUBLIC Threads::Threads)
 
 # Engine core: process kernel (KERNEL.C / PROCESS.C), no platform dependency.
 add_library(crusader_engine
@@ -128,6 +135,7 @@ add_library(crusader_engine
   src/engine/ui/weasel_gump.cpp
   src/engine/ui/mouse_cursor.cpp
   src/engine/ui/main_menu.cpp
+  src/engine/ui/menu_lettering.cpp
   src/engine/ui/christmas_hat.cpp
   src/engine/ui/load_screen.cpp
   src/engine/ui/options_screen.cpp
@@ -138,18 +146,32 @@ add_library(crusader_engine
   src/engine/ui/credits.cpp
   src/engine/ui/gamepad_screen.cpp
   src/engine/ui/enhancements_screen.cpp
+  src/engine/ui/news_screen.cpp
   src/engine/ui/movie_player.cpp
   src/engine/world/auto_firer.cpp
   src/engine/world/render.cpp)
 # The lighting (lighting.cpp) runs on worker threads, the background writer
 # (core/background_writer.cpp) on one: -pthread on older glibc.
-find_package(Threads REQUIRED)
-target_link_libraries(crusader_core PUBLIC Threads::Threads)
 target_link_libraries(crusader_engine PUBLIC crusader_core Threads::Threads)
+
+# Level editor: the model (FIXED.DAT, GLOB.FLX, egg parameters), testable
+# without a window; the game links it for Crusader: No Limit (generator/).
+add_library(crusader_editor_core
+  src/editor/level.cpp
+  src/editor/item_semantics.cpp
+  src/editor/level_tools.cpp
+  src/editor/project.cpp
+  src/editor/generator/biome.cpp
+  src/editor/generator/generator.cpp
+  src/editor/generator/campaign.cpp
+  src/editor/generator/manifest.cpp
+  src/editor/generator/pieces.cpp
+  src/editor/generator/mission.cpp)
+target_link_libraries(crusader_editor_core PUBLIC crusader_core)
 
 if(CRUSADER_LIBRARIES_ONLY)
   add_library(crusader_game src/game/game.cpp)
-  target_link_libraries(crusader_game PUBLIC crusader_engine)
+  target_link_libraries(crusader_game PUBLIC crusader_engine crusader_editor_core)
   return()
 endif()
 
@@ -160,12 +182,20 @@ add_library(crusader_platform
   src/platform/real_shift.cpp
   src/platform/sdl_gamepad.cpp
   src/platform/sdl_audio.cpp
-  src/platform/gl_lighting.cpp)
+  src/platform/gl_lighting.cpp
+  src/platform/http_get.cpp
+  src/platform/process.cpp)
 target_link_libraries(crusader_platform PUBLIC crusader_engine ${SDL2_TARGET})
+# The online news (http_get.cpp): WinHTTP on Windows, libcurl loaded at run time elsewhere.
+if(WIN32)
+  target_link_libraries(crusader_platform PRIVATE winhttp)
+else()
+  target_link_libraries(crusader_platform PRIVATE ${CMAKE_DL_LIBS})
+endif()
 
 # The game without platform code (testable headless), and its executable.
 add_library(crusader_game src/game/game.cpp)
-target_link_libraries(crusader_game PUBLIC crusader_engine)
+target_link_libraries(crusader_game PUBLIC crusader_engine crusader_editor_core)
 
 if(WIN32)
   # Embed the application icon (Explorer, taskbar, window title bar).
@@ -218,14 +248,6 @@ target_link_libraries(shapedump PRIVATE crusader_core)
 add_executable(shape_reach src/tools/shape_reach.cpp)
 target_link_libraries(shape_reach PRIVATE crusader_core)
 
-# Level editor: the model (FIXED.DAT, GLOB.FLX, egg parameters), testable
-# without a window, and the editor itself (Dear ImGui over SDL2).
-add_library(crusader_editor_core
-  src/editor/level.cpp
-  src/editor/item_semantics.cpp
-  src/editor/level_tools.cpp
-  src/editor/project.cpp)
-target_link_libraries(crusader_editor_core PUBLIC crusader_core)
 
 option(CRUSADER_BUILD_EDITOR "Build the level editor (fetches Dear ImGui)" ON)
 if(CRUSADER_BUILD_EDITOR)
@@ -292,6 +314,11 @@ if(Python3_FOUND)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/update_languages.py --check)
 endif()
 
+# The self-update's archives, checksums and install in a scratch folder (core/self_update.hpp).
+add_executable(update_tests tests/update_tests.cpp)
+target_link_libraries(update_tests PRIVATE crusader_core)
+add_test(NAME update_tests COMMAND update_tests)
+
 add_executable(kernel_tests tests/kernel_tests.cpp)
 target_link_libraries(kernel_tests PRIVATE crusader_engine)
 add_test(NAME kernel_tests COMMAND kernel_tests)
@@ -348,15 +375,23 @@ target_link_libraries(display_list_tests PRIVATE crusader_game)
 add_executable(half_render_tests e2e/half_render_tests.cpp)
 target_link_libraries(half_render_tests PRIVATE crusader_game)
 
+add_executable(generator_data_tests e2e/generator_data_tests.cpp)
+target_link_libraries(generator_data_tests PRIVATE crusader_game crusader_editor_core)
+target_include_directories(generator_data_tests PRIVATE e2e)
+target_compile_definitions(generator_data_tests PRIVATE CRUSADER_TEST_SAVES="${CRUSADER_TEST_SAVES_DIR}")
+
 add_executable(game_tests e2e/game_tests.cpp)
 target_link_libraries(game_tests PRIVATE crusader_game crusader_editor_core)
-target_include_directories(game_tests PRIVATE e2e)
+# tests/update_fixtures.hpp: the archives of the self-update test.
+target_include_directories(game_tests PRIVATE e2e tests)
 target_compile_definitions(game_tests PRIVATE CRUSADER_TEST_SAVES="${CRUSADER_TEST_SAVES_DIR}")
 
 if(CRUSADER_GAME_DATA_TESTS)
-    foreach(t core_data_tests shape_draw_tests shape_stream_tests background_save_tests half_render_tests display_list_tests world_data_tests audio_data_tests editor_data_tests game_tests)
+    foreach(t core_data_tests shape_draw_tests shape_stream_tests background_save_tests half_render_tests display_list_tests world_data_tests audio_data_tests editor_data_tests generator_data_tests game_tests)
         add_test(NAME ${t} COMMAND ${t} ${CRUSADER_DATA_DIR})
     endforeach()
+    # Crusader: No Limit missions built from the rooms of map 1 (mission.hpp).
+    add_test(NAME generator_mission_tests COMMAND generator_data_tests ${CRUSADER_DATA_DIR} 1 3 --mission 1)
 endif()
 
 # The US data (v1.23), when found: the same game through the US usecode and texts.
