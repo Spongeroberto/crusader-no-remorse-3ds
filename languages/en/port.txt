@@ -70,7 +70,7 @@ SLOT = SLOT
 SAVED GAME = SAVED GAME
 
 # --- main menu (src/engine/ui/main_menu.cpp)
-NEW VERSION %s AVAILABLE = NEW VERSION %s AVAILABLE
+UPDATE TO %s = UPDATE TO %s
 NEWS = NEWS
 
 # --- online news and updates (src/engine/ui/news_screen.cpp)
