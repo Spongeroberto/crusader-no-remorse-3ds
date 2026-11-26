@@ -538,6 +538,10 @@ int main() {
         game.config().follow_player = true;
         game.config().directional_move = true;
         game.config().draw_on_aim = true;  // R draws the weapon to aim
+        // No 3D lighting: its picture is only shaded on a PC's GPU, so here
+        // it would capture each frame for nothing (a config without the
+        // enhancements' keys turns it on, GameConfig::set_fresh_install_defaults).
+        game.config().lighting = false;
         game.set_hold_to_aim(true);        // only R aims: a stopped run does not
         game.set_menu_quit_shown(false);   // HOME closes the game; before the start-up menu
         game.start_up();
